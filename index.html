@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GeoTrade-X</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    body { background: #000; color: #e1e2eb; font-family: Inter, sans-serif; }
+    .panel { background: #14171f; border: 1px solid rgba(255,255,255,0.07); }
+    .muted { color: #94a3b8; }
+    .tab-active { color: #00daf3; }
+    .tab-idle { color: #64748b; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <header class="h-12 border-b border-white/10 bg-black/95 fixed top-0 left-0 right-0 z-50">
+    <div class="max-w-[1600px] h-full mx-auto px-6 flex items-center justify-between">
+      <h1 class="text-sm font-black tracking-tight">GEOTRADE-X</h1>
+      <nav class="flex gap-7 text-[10px] uppercase font-semibold tracking-wide">
+        <button class="screen-tab tab-active" data-screen="dashboard">Dashboard</button>
+        <button class="screen-tab tab-idle" data-screen="news">News</button>
+        <button class="screen-tab tab-idle" data-screen="market">Market</button>
+        <button class="screen-tab tab-idle" data-screen="watchlist">Watchlist</button>
+      </nav>
+      <p class="text-[9px] text-cyan-400 font-bold">ANALYST_042</p>
+    </div>
+  </header>
+
+  <main class="pt-16 px-6 pb-10 max-w-[1600px] mx-auto">
+    <section id="screen-dashboard" class="screen space-y-3">
+      <div class="flex items-end justify-between">
+        <div>
+          <h2 class="text-3xl font-semibold">Geopolitical Tension Index</h2>
+          <p class="text-[10px] muted uppercase tracking-[0.2em]">Real-time Global Risk Matrix</p>
+        </div>
+      </div>
+      <div id="dashboard-cards" class="grid md:grid-cols-3 gap-3"></div>
+      <div class="grid lg:grid-cols-3 gap-3">
+        <div class="panel p-4 lg:col-span-2">
+          <h3 class="text-lg font-bold">Intelligence Terminal</h3>
+          <p class="text-[9px] muted uppercase tracking-[0.25em] mb-3">Signal Extraction v4.2</p>
+          <div class="overflow-auto">
+            <table class="w-full text-left">
+              <thead class="text-[9px] uppercase tracking-[0.2em] muted border-b border-white/10">
+                <tr><th class="py-2">Time</th><th>Brief</th><th class="text-center">Sentiment</th><th class="text-right">Severity</th></tr>
+              </thead>
+              <tbody id="dashboard-news"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="space-y-3">
+          <div class="panel p-3">
+            <div class="flex justify-between items-center mb-2">
+              <h3 class="text-xs font-black uppercase tracking-widest">Market Impact</h3>
+              <span class="text-[9px] text-cyan-400">LIVE_TICKER</span>
+            </div>
+            <div id="dashboard-market" class="space-y-2 text-sm"></div>
+          </div>
+          <div class="panel p-3">
+            <h3 class="text-xs font-black uppercase tracking-widest muted mb-2">Pinned Assets</h3>
+            <div id="dashboard-watchlist" class="space-y-1 text-xs"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="screen-news" class="screen hidden panel p-4">
+      <h2 class="text-2xl font-semibold mb-1">News Screen</h2>
+      <p class="text-[10px] muted uppercase tracking-[0.2em] mb-4">Live article intelligence feed</p>
+      <div class="overflow-auto">
+        <table class="w-full text-left">
+          <thead class="text-[10px] uppercase tracking-[0.18em] muted border-b border-white/10">
+            <tr><th class="py-2">Published</th><th>Title</th><th>Region</th><th>Category</th><th>Sentiment</th><th class="text-right">Severity</th></tr>
+          </thead>
+          <tbody id="news-table"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="screen-market" class="screen hidden panel p-4">
+      <h2 class="text-2xl font-semibold mb-1">Market Screen</h2>
+      <p class="text-[10px] muted uppercase tracking-[0.2em] mb-4">Asset prices and impact direction</p>
+      <div id="market-grid" class="grid md:grid-cols-2 xl:grid-cols-3 gap-3"></div>
+    </section>
+
+    <section id="screen-watchlist" class="screen hidden panel p-4">
+      <h2 class="text-2xl font-semibold mb-1">Watchlist Screen</h2>
+      <p class="text-[10px] muted uppercase tracking-[0.2em] mb-4">User watchlist assets</p>
+      <div class="overflow-auto">
+        <table class="w-full text-left">
+          <thead class="text-[10px] uppercase tracking-[0.18em] muted border-b border-white/10">
+            <tr><th class="py-2">User</th><th>Watchlist</th><th>Symbol</th><th>Asset</th><th class="text-right">Price</th><th class="text-right">Timestamp</th></tr>
+          </thead>
+          <tbody id="watchlist-table"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const tabs = document.querySelectorAll(".screen-tab");
+    const screens = document.querySelectorAll(".screen");
+
+    function esc(value) {
+      return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    }
+
+    function openScreen(name) {
+      screens.forEach((s) => s.classList.add("hidden"));
+      document.getElementById(`screen-${name}`).classList.remove("hidden");
+      tabs.forEach((t) => {
+        t.classList.toggle("tab-active", t.dataset.screen === name);
+        t.classList.toggle("tab-idle", t.dataset.screen !== name);
+      });
+    }
+
+    tabs.forEach((tab) => tab.addEventListener("click", () => openScreen(tab.dataset.screen)));
+
+    async function getJson(url) {
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Failed: ${url}`);
+      return data;
+    }
+
+    function sentimentColor(v) {
+      if (Number(v) > 0) return "text-emerald-400";
+      if (Number(v) < 0) return "text-rose-300";
+      return "text-slate-300";
+    }
+
+    async function loadDashboard() {
+      const d = await getJson("/api/dashboard");
+      document.getElementById("dashboard-cards").innerHTML = (d.regions || []).map((r) => `
+        <div class="panel p-4 border-l ${Number(r.index_value) >= 20 ? "border-rose-300" : "border-amber-300"}">
+          <div class="flex justify-between items-start mb-2">
+            <span class="text-[10px] uppercase muted font-bold">${esc(r.region_name)}</span>
+            <span class="text-[9px] px-2 py-0.5 rounded bg-white/10">${esc((r.risk_level || "N/A").toUpperCase())}</span>
+          </div>
+          <p class="text-4xl font-black">${Number(r.index_value).toFixed(2)}</p>
+        </div>
+      `).join("") || `<div class="muted">No GTI data.</div>`;
+
+      document.getElementById("dashboard-news").innerHTML = (d.terminal || []).map((n) => `
+        <tr class="border-b border-white/5">
+          <td class="py-3 text-[11px] font-mono muted">${new Date(n.timestamp).toLocaleTimeString()}</td>
+          <td class="py-3"><div class="font-semibold">${esc(n.title)}</div><div class="text-[10px] muted uppercase">${esc(n.region_name)} • ${esc(n.category_name)}</div></td>
+          <td class="py-3 text-center ${sentimentColor(n.sentiment)} font-semibold">${Number(n.sentiment).toFixed(2)}</td>
+          <td class="py-3 text-right text-[10px] uppercase font-bold">${esc(n.severity_name)}</td>
+        </tr>
+      `).join("") || `<tr><td colspan="4" class="py-3 muted">No news rows.</td></tr>`;
+
+      document.getElementById("dashboard-market").innerHTML = (d.market || []).map((m) => `
+        <div class="flex justify-between">
+          <div><p class="font-semibold">${esc(m.asset_name)}</p><p class="text-[10px] uppercase muted">${esc(m.asset_symbol)}</p></div>
+          <div class="text-right"><p class="font-mono">${Number(m.price_value).toFixed(2)}</p><p class="text-[10px] ${m.direction === "Bullish" ? "text-emerald-400" : m.direction === "Bearish" ? "text-rose-300" : "muted"}">${esc(m.direction || "Neutral")}</p></div>
+        </div>
+      `).join("") || `<p class="muted">No market rows.</p>`;
+
+      document.getElementById("dashboard-watchlist").innerHTML = (d.watchlist || []).map((w) => `
+        <div class="flex justify-between border-b border-white/5 py-1">
+          <span class="font-mono">${esc(w.asset_symbol)}</span>
+          <span class="font-mono">${Number(w.price_value).toFixed(2)}</span>
+        </div>
+      `).join("") || `<p class="muted">No watchlist rows.</p>`;
+    }
+
+    async function loadNews() {
+      const d = await getJson("/api/news");
+      document.getElementById("news-table").innerHTML = (d.rows || []).map((r) => `
+        <tr class="border-b border-white/5">
+          <td class="py-2 text-[11px] font-mono muted">${new Date(r.published_at).toLocaleString()}</td>
+          <td class="py-2">${esc(r.title)}</td>
+          <td class="py-2">${esc(r.region_name)}</td>
+          <td class="py-2">${esc(r.category_name)}</td>
+          <td class="py-2 ${sentimentColor(r.sentiment)}">${Number(r.sentiment).toFixed(2)}</td>
+          <td class="py-2 text-right uppercase text-[10px]">${esc(r.severity_name)}</td>
+        </tr>
+      `).join("") || `<tr><td colspan="6" class="py-3 muted">No rows found.</td></tr>`;
+    }
+
+    async function loadMarket() {
+      const d = await getJson("/api/market");
+      document.getElementById("market-grid").innerHTML = (d.rows || []).map((r) => `
+        <div class="panel p-3">
+          <div class="flex justify-between items-start">
+            <div><p class="font-bold">${esc(r.asset_name)}</p><p class="text-[10px] uppercase muted">${esc(r.asset_symbol)}</p></div>
+            <span class="text-[10px] ${r.direction === "Bullish" ? "text-emerald-400" : r.direction === "Bearish" ? "text-rose-300" : "muted"}">${esc(r.direction || "Neutral")}</span>
+          </div>
+          <p class="text-2xl font-black mt-3">${Number(r.price_value).toFixed(2)}</p>
+          <p class="text-[10px] muted mt-1">Volatility: ${r.predicted_volatility == null ? "N/A" : Number(r.predicted_volatility).toFixed(4)}</p>
+        </div>
+      `).join("") || `<p class="muted">No market rows found.</p>`;
+    }
+
+    async function loadWatchlist() {
+      const d = await getJson("/api/watchlist");
+      document.getElementById("watchlist-table").innerHTML = (d.rows || []).map((r) => `
+        <tr class="border-b border-white/5">
+          <td class="py-2">${esc(r.username)}</td>
+          <td class="py-2">${esc(r.watchlist_name)}</td>
+          <td class="py-2 font-mono">${esc(r.asset_symbol)}</td>
+          <td class="py-2">${esc(r.asset_name)}</td>
+          <td class="py-2 text-right font-mono">${Number(r.price_value).toFixed(2)}</td>
+          <td class="py-2 text-right text-[11px] muted">${new Date(r.price_timestamp).toLocaleString()}</td>
+        </tr>
+      `).join("") || `<tr><td colspan="6" class="py-3 muted">No rows found.</td></tr>`;
+    }
+
+    Promise.all([loadDashboard(), loadNews(), loadMarket(), loadWatchlist()])
+      .catch((e) => {
+        ["dashboard-news", "news-table", "market-grid", "watchlist-table", "dashboard-market", "dashboard-watchlist"]
+          .forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = `<div class="text-rose-300">${esc(e.message)}</div>`;
+          });
+      });
+  </script>
+</body>
+</html>
