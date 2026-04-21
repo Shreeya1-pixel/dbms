@@ -12,6 +12,13 @@
     .muted { color: #94a3b8; }
     .tab-active { color: #00daf3; }
     .tab-idle { color: #64748b; }
+    .num-critical { color: #ff9f9a; }
+    .num-elevated { color: #ffbe63; }
+    .num-positive { color: #59e5ab; }
+    .num-negative { color: #ff8f86; }
+    .badge-critical { background: rgba(147, 0, 10, 0.35); color: #ffd9d3; }
+    .badge-elevated { background: rgba(238, 152, 0, 0.35); color: #ffd59d; }
+    .badge-low { background: rgba(0, 178, 123, 0.30); color: #7bffd0; }
   </style>
 </head>
 <body class="min-h-screen">
@@ -57,6 +64,21 @@
               <span class="text-[9px] text-cyan-400">LIVE_TICKER</span>
             </div>
             <div id="dashboard-market" class="space-y-2 text-sm"></div>
+          </div>
+          <div class="panel p-0 overflow-hidden">
+            <div class="relative h-44">
+              <img
+                class="w-full h-full object-cover opacity-60"
+                src="https://lh3.googleusercontent.com/aida-public/AB6AXuAZbd_h-K2Tp_-P8kp3t0-FY_4AJb_w_1L2AiKP3TinHN7NtPawyjuGbjNNyaokpCih-oaH-aZQsXI9hv8ReWPRF5tey5A52tky6HRaehLU-O-mR29EaPRLiRmCvSBCgzb3Wr-cX6S8tcj5ZeYC7-0ffOImNzNPU93ihvvgKTtjpQekEd9W7POJQxIbYtaOv6N9D8luzxKlipFtDibnZvn8kmeNDDNdZR7VB4luyNPpZMcw-XQwOGthRxDhaHQgr0W-sCLcShsA8FI"
+                alt="Global GTI Heatmap"
+              />
+              <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent"></div>
+              <div class="absolute left-4 bottom-3">
+                <p class="text-cyan-400 text-[11px] font-black uppercase tracking-[0.15em]">Active Surveillance</p>
+                <p class="text-[14px] font-semibold">Global GTI Heatmap</p>
+              </div>
+              <div class="absolute right-4 top-4 w-3 h-3 rounded-full bg-cyan-400"></div>
+            </div>
           </div>
           <div class="panel p-3">
             <h3 class="text-xs font-black uppercase tracking-widest muted mb-2">Pinned Assets</h3>
@@ -126,43 +148,70 @@
     }
 
     function sentimentColor(v) {
-      if (Number(v) > 0) return "text-emerald-400";
-      if (Number(v) < 0) return "text-rose-300";
+      if (Number(v) > 0) return "num-positive";
+      if (Number(v) < 0) return "num-negative";
+      return "text-slate-300";
+    }
+
+    function riskVisuals(level, value) {
+      const l = String(level || "").toLowerCase();
+      if (l.includes("critical") || Number(value) >= 25) {
+        return { border: "border-rose-300", num: "num-critical", badge: "badge-critical" };
+      }
+      if (l.includes("high") || l.includes("elevated") || Number(value) >= 12) {
+        return { border: "border-amber-300", num: "num-elevated", badge: "badge-elevated" };
+      }
+      return { border: "border-emerald-300", num: "num-positive", badge: "badge-low" };
+    }
+
+    function severityColor(severity) {
+      const s = String(severity || "").toLowerCase();
+      if (s.includes("critical") || s.includes("high")) return "num-negative";
+      if (s.includes("medium") || s.includes("elevated")) return "num-elevated";
+      return "num-positive";
+    }
+
+    function directionColor(direction) {
+      const d = String(direction || "").toLowerCase();
+      if (d === "bullish") return "num-positive";
+      if (d === "bearish") return "num-negative";
       return "text-slate-300";
     }
 
     async function loadDashboard() {
       const d = await getJson("/api/dashboard");
       document.getElementById("dashboard-cards").innerHTML = (d.regions || []).map((r) => `
-        <div class="panel p-4 border-l ${Number(r.index_value) >= 20 ? "border-rose-300" : "border-amber-300"}">
+        ${(() => { const rv = riskVisuals(r.risk_level, r.index_value); return `
+        <div class="panel p-4 border-l ${rv.border}">
           <div class="flex justify-between items-start mb-2">
             <span class="text-[10px] uppercase muted font-bold">${esc(r.region_name)}</span>
-            <span class="text-[9px] px-2 py-0.5 rounded bg-white/10">${esc((r.risk_level || "N/A").toUpperCase())}</span>
+            <span class="text-[9px] px-2 py-0.5 rounded ${rv.badge}">${esc((r.risk_level || "N/A").toUpperCase())}</span>
           </div>
-          <p class="text-4xl font-black">${Number(r.index_value).toFixed(2)}</p>
+          <p class="text-4xl font-black ${rv.num}">${Number(r.index_value).toFixed(2)}</p>
         </div>
+      `; })()}
       `).join("") || `<div class="muted">No GTI data.</div>`;
 
       document.getElementById("dashboard-news").innerHTML = (d.terminal || []).map((n) => `
         <tr class="border-b border-white/5">
           <td class="py-3 text-[11px] font-mono muted">${new Date(n.timestamp).toLocaleTimeString()}</td>
           <td class="py-3"><div class="font-semibold">${esc(n.title)}</div><div class="text-[10px] muted uppercase">${esc(n.region_name)} • ${esc(n.category_name)}</div></td>
-          <td class="py-3 text-center ${sentimentColor(n.sentiment)} font-semibold">${Number(n.sentiment).toFixed(2)}</td>
-          <td class="py-3 text-right text-[10px] uppercase font-bold">${esc(n.severity_name)}</td>
+          <td class="py-3 text-center font-semibold"><span class="text-[10px] px-2 py-0.5 rounded ${Number(n.sentiment) < 0 ? "badge-critical" : Number(n.sentiment) > 0 ? "badge-low" : "bg-white/10 text-slate-300"} ${sentimentColor(n.sentiment)}">${Number(n.sentiment).toFixed(2)}</span></td>
+          <td class="py-3 text-right text-[10px] uppercase font-bold ${severityColor(n.severity_name)}">${esc(n.severity_name)}</td>
         </tr>
       `).join("") || `<tr><td colspan="4" class="py-3 muted">No news rows.</td></tr>`;
 
       document.getElementById("dashboard-market").innerHTML = (d.market || []).map((m) => `
         <div class="flex justify-between">
           <div><p class="font-semibold">${esc(m.asset_name)}</p><p class="text-[10px] uppercase muted">${esc(m.asset_symbol)}</p></div>
-          <div class="text-right"><p class="font-mono">${Number(m.price_value).toFixed(2)}</p><p class="text-[10px] ${m.direction === "Bullish" ? "text-emerald-400" : m.direction === "Bearish" ? "text-rose-300" : "muted"}">${esc(m.direction || "Neutral")}</p></div>
+          <div class="text-right"><p class="font-mono ${directionColor(m.direction)}">${Number(m.price_value).toFixed(2)}</p><p class="text-[10px] ${directionColor(m.direction)}">${esc(m.direction || "Neutral")}</p></div>
         </div>
       `).join("") || `<p class="muted">No market rows.</p>`;
 
       document.getElementById("dashboard-watchlist").innerHTML = (d.watchlist || []).map((w) => `
         <div class="flex justify-between border-b border-white/5 py-1">
           <span class="font-mono">${esc(w.asset_symbol)}</span>
-          <span class="font-mono">${Number(w.price_value).toFixed(2)}</span>
+          <span class="font-mono ${directionColor(w.direction)}">${Number(w.price_value).toFixed(2)}</span>
         </div>
       `).join("") || `<p class="muted">No watchlist rows.</p>`;
     }
@@ -176,7 +225,7 @@
           <td class="py-2">${esc(r.region_name)}</td>
           <td class="py-2">${esc(r.category_name)}</td>
           <td class="py-2 ${sentimentColor(r.sentiment)}">${Number(r.sentiment).toFixed(2)}</td>
-          <td class="py-2 text-right uppercase text-[10px]">${esc(r.severity_name)}</td>
+          <td class="py-2 text-right uppercase text-[10px] ${severityColor(r.severity_name)}">${esc(r.severity_name)}</td>
         </tr>
       `).join("") || `<tr><td colspan="6" class="py-3 muted">No rows found.</td></tr>`;
     }
@@ -187,9 +236,9 @@
         <div class="panel p-3">
           <div class="flex justify-between items-start">
             <div><p class="font-bold">${esc(r.asset_name)}</p><p class="text-[10px] uppercase muted">${esc(r.asset_symbol)}</p></div>
-            <span class="text-[10px] ${r.direction === "Bullish" ? "text-emerald-400" : r.direction === "Bearish" ? "text-rose-300" : "muted"}">${esc(r.direction || "Neutral")}</span>
+            <span class="text-[10px] ${directionColor(r.direction)}">${esc(r.direction || "Neutral")}</span>
           </div>
-          <p class="text-2xl font-black mt-3">${Number(r.price_value).toFixed(2)}</p>
+          <p class="text-2xl font-black mt-3 ${directionColor(r.direction)}">${Number(r.price_value).toFixed(2)}</p>
           <p class="text-[10px] muted mt-1">Volatility: ${r.predicted_volatility == null ? "N/A" : Number(r.predicted_volatility).toFixed(4)}</p>
         </div>
       `).join("") || `<p class="muted">No market rows found.</p>`;
@@ -203,7 +252,7 @@
           <td class="py-2">${esc(r.watchlist_name)}</td>
           <td class="py-2 font-mono">${esc(r.asset_symbol)}</td>
           <td class="py-2">${esc(r.asset_name)}</td>
-          <td class="py-2 text-right font-mono">${Number(r.price_value).toFixed(2)}</td>
+          <td class="py-2 text-right font-mono ${directionColor(r.direction)}">${Number(r.price_value).toFixed(2)}</td>
           <td class="py-2 text-right text-[11px] muted">${new Date(r.price_timestamp).toLocaleString()}</td>
         </tr>
       `).join("") || `<tr><td colspan="6" class="py-3 muted">No rows found.</td></tr>`;
