@@ -53,7 +53,7 @@ app.get("/api/dashboard", async (_req, res) => {
     );
 
     const [watchlist] = await pool.query(
-      `SELECT a.asset_symbol, ap.price_value
+      `SELECT a.asset_symbol, ap.price_value, ms.direction
        FROM watchlist_items wi
        JOIN watchlists w ON w.watchlist_id = wi.watchlist_id
        JOIN assets a ON a.asset_id = wi.asset_id
@@ -63,6 +63,7 @@ app.get("/api/dashboard", async (_req, res) => {
          GROUP BY asset_id
        ) latest ON latest.asset_id = a.asset_id
        JOIN asset_prices ap ON ap.asset_id = latest.asset_id AND ap.price_timestamp = latest.max_ts
+       LEFT JOIN v_market_screen ms ON ms.asset_symbol = a.asset_symbol
        ORDER BY w.watchlist_id, wi.watchlist_item_id
        LIMIT 5`
     );
@@ -107,8 +108,9 @@ app.get("/api/market", async (_req, res) => {
 app.get("/api/watchlist", async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT watchlist_id, watchlist_name, username, asset_symbol, asset_name, price_value, price_timestamp
-       FROM v_watchlist_screen
+      `SELECT ws.watchlist_id, ws.watchlist_name, ws.username, ws.asset_symbol, ws.asset_name, ws.price_value, ws.price_timestamp, ms.direction
+       FROM v_watchlist_screen ws
+       LEFT JOIN v_market_screen ms ON ms.asset_symbol = ws.asset_symbol
        ORDER BY watchlist_name, asset_symbol
        LIMIT 200`
     );
