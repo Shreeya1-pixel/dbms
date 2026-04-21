@@ -47,7 +47,7 @@ app.get("/api/dashboard", async (_req, res) => {
 
     const [market] = await pool.query(
       `SELECT asset_name, asset_symbol, price_value, direction
-       FROM v_latest_market_impact
+       FROM v_market_screen
        ORDER BY price_timestamp DESC
        LIMIT 5`
     );
