@@ -40,6 +40,33 @@ ensureUserTradesTable().catch((error) => {
   console.error("Failed to ensure User_Trades table:", error.message);
 });
 
+async function ensureViewAndRole() {
+  await pool.query(`
+    CREATE OR REPLACE VIEW Region_Risk AS
+    SELECT
+      r.region_id,
+      r.name AS region_name,
+      g.record_date,
+      g.index_value,
+      CASE
+        WHEN g.index_value > 25 THEN 'Critical'
+        WHEN g.index_value > 15 THEN 'High'
+        WHEN g.index_value > 5 THEN 'Medium'
+        ELSE 'Low'
+      END AS risk_level
+    FROM Regions r
+    JOIN GTI_Records g ON g.region_id = r.region_id
+  `);
+  await pool.query("CREATE ROLE IF NOT EXISTS analyst_role");
+  await pool.query("GRANT SELECT ON GeoTradeX.* TO analyst_role");
+  await pool.query("CREATE USER IF NOT EXISTS 'analyst1'@'localhost' IDENTIFIED BY 'pass123'");
+  await pool.query("GRANT analyst_role TO 'analyst1'@'localhost'");
+}
+
+ensureViewAndRole().catch((error) => {
+  console.error("Failed to ensure view/role objects:", error.message);
+});
+
 app.get("/api/dashboard", async (_req, res) => {
   try {
     const [regions] = await pool.query(
@@ -303,6 +330,35 @@ app.get("/api/trades", async (_req, res) => {
     return res.json({ rows });
   } catch (error) {
     return res.status(500).json({ error: "Trades query failed", details: error.message });
+  }
+});
+
+app.get("/api/region-risk", async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT region_id, region_name, record_date, index_value, risk_level
+       FROM Region_Risk
+       ORDER BY index_value DESC
+       LIMIT 50`
+    );
+    return res.json({ rows });
+  } catch (error) {
+    return res.status(500).json({ error: "Region_Risk view query failed", details: error.message });
+  }
+});
+
+app.get("/api/role-grants", async (_req, res) => {
+  try {
+    const [roleGrants] = await pool.query("SHOW GRANTS FOR 'analyst_role'@'%'");
+    const [userGrants] = await pool.query("SHOW GRANTS FOR 'analyst1'@'localhost'");
+    return res.json({
+      role: "analyst_role",
+      roleGrants: roleGrants.map((row) => Object.values(row)[0]),
+      user: "analyst1@localhost",
+      userGrants: userGrants.map((row) => Object.values(row)[0]),
+    });
+  } catch (error) {
+    return res.status(500).json({ error: "Role/grant query failed", details: error.message });
   }
 });
 

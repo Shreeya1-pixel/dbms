@@ -137,6 +137,23 @@
     <section id="screen-tables" class="screen hidden panel p-4">
       <h2 class="text-2xl font-semibold mb-1">Database Tables</h2>
       <p class="text-[10px] muted uppercase tracking-[0.2em] mb-4">All GeoTradeX tables and values</p>
+      <div class="grid lg:grid-cols-2 gap-3 mb-4">
+        <div class="panel p-3">
+          <h3 class="text-sm font-bold mb-2">View: Region_Risk</h3>
+          <div class="overflow-auto max-h-56">
+            <table class="w-full text-left">
+              <thead class="text-[10px] uppercase tracking-[0.18em] muted border-b border-white/10">
+                <tr><th class="py-2">Region</th><th class="text-right">GTI</th><th class="text-right">Risk</th></tr>
+              </thead>
+              <tbody id="region-risk-body"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel p-3">
+          <h3 class="text-sm font-bold mb-2">Role / Grant</h3>
+          <pre id="role-grants-box" class="text-xs muted whitespace-pre-wrap">Loading...</pre>
+        </div>
+      </div>
       <div class="flex gap-2 items-center mb-3">
         <select id="table-select" class="bg-black border border-white/10 rounded px-2 py-1 text-sm"></select>
         <button id="load-table-btn" class="bg-cyan-500 text-black font-semibold px-3 py-1 rounded text-sm">Load</button>
@@ -398,6 +415,25 @@
       `).join("") || `<tr><td colspan="8" class="py-3 muted">No trades yet.</td></tr>`;
     }
 
+    async function loadRegionRiskView() {
+      const d = await getJson("/api/region-risk");
+      document.getElementById("region-risk-body").innerHTML = (d.rows || []).map((r) => `
+        <tr class="border-b border-white/5">
+          <td class="py-2">${esc(r.region_name)}</td>
+          <td class="py-2 text-right">${Number(r.index_value).toFixed(2)}</td>
+          <td class="py-2 text-right ${severityColor(r.risk_level)}">${esc(r.risk_level)}</td>
+        </tr>
+      `).join("") || `<tr><td colspan="3" class="py-3 muted">No rows in Region_Risk view.</td></tr>`;
+    }
+
+    async function loadRoleGrants() {
+      const d = await getJson("/api/role-grants");
+      const roleText = (d.roleGrants || []).join("\n");
+      const userText = (d.userGrants || []).join("\n");
+      document.getElementById("role-grants-box").textContent =
+        `Role: ${d.role}\n${roleText}\n\nUser: ${d.user}\n${userText}`;
+    }
+
     document.getElementById("load-table-btn").addEventListener("click", async () => {
       const name = document.getElementById("table-select").value;
       await loadTableData(name);
@@ -432,9 +468,9 @@
       }
     });
 
-    Promise.all([loadDashboard(), loadNews(), loadMarket(), loadWatchlist(), loadTableNames(), loadTrades()])
+    Promise.all([loadDashboard(), loadNews(), loadMarket(), loadWatchlist(), loadTableNames(), loadTrades(), loadRegionRiskView(), loadRoleGrants()])
       .catch((e) => {
-        ["dashboard-news", "news-table", "market-grid", "watchlist-table", "dashboard-market", "dashboard-watchlist", "table-body", "trades-table"]
+        ["dashboard-news", "news-table", "market-grid", "watchlist-table", "dashboard-market", "dashboard-watchlist", "table-body", "trades-table", "region-risk-body", "role-grants-box"]
           .forEach((id) => {
             const el = document.getElementById(id);
             if (el) el.innerHTML = `<div class="text-rose-300">${esc(e.message)}</div>`;

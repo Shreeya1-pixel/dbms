@@ -439,3 +439,27 @@ CALL bulk_impact();
 INSERT INTO User_Trades (user_id, trade_date, trade_type, asset_name, quantity, trade_price, notes) VALUES
 (1, CURDATE(), 'BUY', 'Gold', 2, 2045.50, 'Initial sample trade'),
 (2, CURDATE(), 'SELL', 'Bitcoin', 0.2, 62000.00, 'Initial sample trade');
+
+CREATE OR REPLACE VIEW Region_Risk AS
+SELECT
+  r.region_id,
+  r.name AS region_name,
+  g.record_date,
+  g.index_value,
+  CASE
+    WHEN g.index_value > 25 THEN 'Critical'
+    WHEN g.index_value > 15 THEN 'High'
+    WHEN g.index_value > 5 THEN 'Medium'
+    ELSE 'Low'
+  END AS risk_level
+FROM Regions r
+JOIN GTI_Records g ON g.region_id = r.region_id;
+
+CREATE ROLE IF NOT EXISTS analyst_role;
+GRANT SELECT ON GeoTradeX.* TO analyst_role;
+
+CREATE USER IF NOT EXISTS 'analyst1'@'localhost' IDENTIFIED BY 'pass123';
+GRANT analyst_role TO 'analyst1'@'localhost';
+
+-- Example REVOKE (easy demo):
+-- REVOKE SELECT ON GeoTradeX.* FROM analyst_role;
