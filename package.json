@@ -1,15 +1,10 @@
 {
-  "name": "dbms",
-  "version": "1.0.0",
-  "description": "",
-  "main": "backend/server.js",
+  "name": "geotradex",
+  "private": true,
+  "type": "commonjs",
   "scripts": {
     "start": "node backend/server.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
