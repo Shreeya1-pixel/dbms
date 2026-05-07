@@ -286,15 +286,28 @@ app.post("/api/watchlist-items", async (req, res) => {
 });
 
 app.get("/api/tables", (_req, res) => {
-  res.json({
-    tables: [
-      "Regions", "Countries", "Cities", "Source_Types", "News_Sources", "News_Articles",
-      "Sentiment_Scores", "Severity_Levels", "Categories", "Event_Types", "Article_Analysis",
-      "GTI_Records", "GTI_History", "Risk_Thresholds", "Asset_Types", "Assets", "Asset_Prices",
-      "Market_Impact", "Roles", "Users", "Watchlists", "Watchlist_Items", "Risk_Scores",
-      "Trend_Analysis", "GTI_Alerts", "User_Trades",
-    ],
-  });
+  const tables = [
+    "Regions", "Countries", "Cities", "Source_Types", "News_Sources", "News_Articles",
+    "Sentiment_Scores", "Severity_Levels", "Categories", "Event_Types", "Article_Analysis",
+    "GTI_Records", "GTI_History", "Risk_Thresholds", "Asset_Types", "Assets", "Asset_Prices",
+    "Market_Impact", "Roles", "Users", "Watchlists", "Watchlist_Items", "Risk_Scores",
+    "Trend_Analysis", "GTI_Alerts", "User_Trades",
+  ];
+
+  (async () => {
+    try {
+      const available = [];
+      for (const table of tables) {
+        const [countRows] = await pool.query(`SELECT COUNT(*) AS c FROM ${table}`);
+        if (Number(countRows[0].c) > 0) {
+          available.push(table);
+        }
+      }
+      res.json({ tables: available });
+    } catch (error) {
+      res.status(500).json({ error: "Tables query failed", details: error.message });
+    }
+  })();
 });
 
 app.get("/api/tables/:name", async (req, res) => {
