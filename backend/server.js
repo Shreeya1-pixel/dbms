@@ -2,12 +2,12 @@ const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const mysql = require("mysql2/promise");
-require("dotenv").config();
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname)));
+app.use(express.static(path.join(__dirname, "..", "frontend")));
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || "localhost",
@@ -121,7 +121,7 @@ app.get("/api/watchlist", async (_req, res) => {
 });
 
 app.get(/.*/, (_req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
+  res.sendFile(path.join(__dirname, "..", "frontend", "index.html"));
 });
 
 const port = Number(process.env.PORT || 5500);
