@@ -14,7 +14,7 @@ const pool = mysql.createPool({
   port: Number(process.env.DB_PORT || 3306),
   user: process.env.DB_USER || "root",
   password: process.env.DB_PASSWORD || "",
-  database: process.env.DB_NAME || "geotradex",
+  database: process.env.DB_NAME || "GeoTradeX",
   waitForConnections: true,
   connectionLimit: 10,
 });
@@ -22,49 +22,75 @@ const pool = mysql.createPool({
 app.get("/api/dashboard", async (_req, res) => {
   try {
     const [regions] = await pool.query(
-      `SELECT region_name, index_value, risk_level
-       FROM v_latest_region_gti
+      `SELECT r.name AS region_name,
+              g.index_value,
+              CASE
+                WHEN g.index_value > 25 THEN 'Critical'
+                WHEN g.index_value > 15 THEN 'High'
+                WHEN g.index_value > 5 THEN 'Medium'
+                ELSE 'Low'
+              END AS risk_level
+       FROM GTI_Records g
+       JOIN Regions r ON r.region_id = g.region_id
        ORDER BY index_value DESC
        LIMIT 3`
     );
 
     const [terminal] = await pool.query(
-      `SELECT a.published_at AS timestamp,
+      `SELECT a.publish_date AS timestamp,
               a.title,
-              r.region_name,
+              r.name AS region_name,
               c.category_name,
-              s.score_value AS sentiment,
-              sv.severity_name
-       FROM article_analysis aa
-       JOIN articles a ON a.article_id = aa.article_id
-       JOIN regions r ON r.region_id = a.region_id
-       JOIN sentiment_labels s ON s.sentiment_id = aa.sentiment_id
-       JOIN severity_levels sv ON sv.severity_id = aa.severity_id
-       JOIN categories c ON c.category_id = aa.category_id
-       ORDER BY a.published_at DESC
+              aa.sentiment_score AS sentiment,
+              sv.level_name AS severity_name
+       FROM Article_Analysis aa
+       JOIN News_Articles a ON a.article_id = aa.article_id
+       JOIN Regions r ON r.region_id = a.region_id
+       JOIN Severity_Levels sv ON sv.severity_id = aa.severity_id
+       JOIN Categories c ON c.category_id = aa.category_id
+       ORDER BY a.publish_date DESC
        LIMIT 5`
     );
 
     const [market] = await pool.query(
-      `SELECT asset_name, asset_symbol, price_value, direction
-       FROM v_market_screen
-       ORDER BY price_timestamp DESC
+      `SELECT a.name AS asset_name,
+              a.name AS asset_symbol,
+              ap.price AS price_value,
+              mi.direction
+       FROM Market_Impact mi
+       JOIN Assets a ON a.asset_id = mi.asset_id
+       LEFT JOIN (
+         SELECT p1.asset_id, p1.price
+         FROM Asset_Prices p1
+         JOIN (
+           SELECT asset_id, MAX(price_date) AS max_date
+           FROM Asset_Prices
+           GROUP BY asset_id
+         ) latest ON latest.asset_id = p1.asset_id AND latest.max_date = p1.price_date
+       ) ap ON ap.asset_id = a.asset_id
+       ORDER BY mi.impact_date DESC, mi.impact_id DESC
        LIMIT 5`
     );
 
     const [watchlist] = await pool.query(
-      `SELECT a.asset_symbol, ap.price_value, ms.direction
-       FROM watchlist_items wi
-       JOIN watchlists w ON w.watchlist_id = wi.watchlist_id
-       JOIN assets a ON a.asset_id = wi.asset_id
+      `SELECT a.name AS asset_symbol, ap.price AS price_value, mi.direction
+       FROM Watchlist_Items wi
+       JOIN Watchlists w ON w.watchlist_id = wi.watchlist_id
+       JOIN Assets a ON a.asset_id = wi.asset_id
        JOIN (
-         SELECT asset_id, MAX(price_timestamp) AS max_ts
-         FROM asset_prices
+         SELECT asset_id, MAX(price_date) AS max_ts
+         FROM Asset_Prices
          GROUP BY asset_id
        ) latest ON latest.asset_id = a.asset_id
-       JOIN asset_prices ap ON ap.asset_id = latest.asset_id AND ap.price_timestamp = latest.max_ts
-       LEFT JOIN v_market_screen ms ON ms.asset_symbol = a.asset_symbol
-       ORDER BY w.watchlist_id, wi.watchlist_item_id
+       JOIN Asset_Prices ap ON ap.asset_id = latest.asset_id AND ap.price_date = latest.max_ts
+       LEFT JOIN Market_Impact mi ON mi.impact_id = (
+         SELECT mi2.impact_id
+         FROM Market_Impact mi2
+         WHERE mi2.asset_id = a.asset_id
+         ORDER BY mi2.impact_date DESC, mi2.impact_id DESC
+         LIMIT 1
+       )
+       ORDER BY w.watchlist_id, wi.id
        LIMIT 5`
     );
 
@@ -80,9 +106,19 @@ app.get("/api/dashboard", async (_req, res) => {
 app.get("/api/news", async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT article_id, published_at, title, region_name, category_name, sentiment, severity_name
-       FROM v_news_feed
-       ORDER BY published_at DESC
+      `SELECT a.article_id,
+              a.publish_date AS published_at,
+              a.title,
+              r.name AS region_name,
+              c.category_name,
+              aa.sentiment_score AS sentiment,
+              sv.level_name AS severity_name
+       FROM News_Articles a
+       JOIN Article_Analysis aa ON aa.article_id = a.article_id
+       JOIN Regions r ON r.region_id = a.region_id
+       JOIN Categories c ON c.category_id = aa.category_id
+       JOIN Severity_Levels sv ON sv.severity_id = aa.severity_id
+       ORDER BY a.publish_date DESC
        LIMIT 50`
     );
     res.json({ rows });
@@ -94,9 +130,31 @@ app.get("/api/news", async (_req, res) => {
 app.get("/api/market", async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT asset_id, asset_symbol, asset_name, price_value, price_timestamp, direction, predicted_volatility
-       FROM v_market_screen
-       ORDER BY price_timestamp DESC
+      `SELECT a.asset_id,
+              a.name AS asset_symbol,
+              a.name AS asset_name,
+              ap.price AS price_value,
+              ap.price_date AS price_timestamp,
+              mi.direction,
+              mi.predicted_volatility
+       FROM Assets a
+       LEFT JOIN (
+         SELECT p1.asset_id, p1.price_date, p1.price
+         FROM Asset_Prices p1
+         JOIN (
+           SELECT asset_id, MAX(price_date) AS max_date
+           FROM Asset_Prices
+           GROUP BY asset_id
+         ) latest ON latest.asset_id = p1.asset_id AND latest.max_date = p1.price_date
+       ) ap ON ap.asset_id = a.asset_id
+       LEFT JOIN Market_Impact mi ON mi.impact_id = (
+         SELECT mi2.impact_id
+         FROM Market_Impact mi2
+         WHERE mi2.asset_id = a.asset_id
+         ORDER BY mi2.impact_date DESC, mi2.impact_id DESC
+         LIMIT 1
+       )
+       ORDER BY ap.price_date DESC, a.asset_id
        LIMIT 100`
     );
     res.json({ rows });
@@ -108,15 +166,106 @@ app.get("/api/market", async (_req, res) => {
 app.get("/api/watchlist", async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT ws.watchlist_id, ws.watchlist_name, ws.username, ws.asset_symbol, ws.asset_name, ws.price_value, ws.price_timestamp, ms.direction
-       FROM v_watchlist_screen ws
-       LEFT JOIN v_market_screen ms ON ms.asset_symbol = ws.asset_symbol
-       ORDER BY watchlist_name, asset_symbol
+      `SELECT w.watchlist_id,
+              CONCAT('Watchlist ', w.watchlist_id) AS watchlist_name,
+              u.user_name AS username,
+              a.name AS asset_symbol,
+              a.name AS asset_name,
+              ap.price AS price_value,
+              ap.price_date AS price_timestamp,
+              mi.direction
+       FROM Watchlist_Items wi
+       JOIN Watchlists w ON w.watchlist_id = wi.watchlist_id
+       JOIN Users u ON u.user_id = w.user_id
+       JOIN Assets a ON a.asset_id = wi.asset_id
+       LEFT JOIN (
+         SELECT p1.asset_id, p1.price_date, p1.price
+         FROM Asset_Prices p1
+         JOIN (
+           SELECT asset_id, MAX(price_date) AS max_date
+           FROM Asset_Prices
+           GROUP BY asset_id
+         ) latest ON latest.asset_id = p1.asset_id AND latest.max_date = p1.price_date
+       ) ap ON ap.asset_id = a.asset_id
+       LEFT JOIN Market_Impact mi ON mi.impact_id = (
+         SELECT mi2.impact_id
+         FROM Market_Impact mi2
+         WHERE mi2.asset_id = a.asset_id
+         ORDER BY mi2.impact_date DESC, mi2.impact_id DESC
+         LIMIT 1
+       )
+       ORDER BY w.watchlist_id, a.name
        LIMIT 200`
     );
     res.json({ rows });
   } catch (error) {
     res.status(500).json({ error: "Watchlist query failed", details: error.message });
+  }
+});
+
+app.post("/api/watchlist-items", async (req, res) => {
+  try {
+    const watchlistId = Number(req.body?.watchlist_id);
+    const assetName = String(req.body?.asset_name || "").trim();
+
+    if (!watchlistId || !assetName) {
+      return res.status(400).json({
+        error: "watchlist_id and asset_name are required",
+      });
+    }
+
+    const [assetRows] = await pool.query(
+      "SELECT asset_id FROM Assets WHERE name = ? LIMIT 1",
+      [assetName]
+    );
+
+    if (!assetRows.length) {
+      return res.status(404).json({ error: "Asset symbol not found" });
+    }
+
+    await pool.query(
+      "INSERT INTO Watchlist_Items (watchlist_id, asset_id) VALUES (?, ?)",
+      [watchlistId, assetRows[0].asset_id]
+    );
+
+    return res.status(201).json({ ok: true });
+  } catch (error) {
+    if (error && error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ error: "Asset already exists in this watchlist" });
+    }
+    return res.status(500).json({ error: "Failed to add watchlist item", details: error.message });
+  }
+});
+
+app.get("/api/tables", (_req, res) => {
+  res.json({
+    tables: [
+      "Regions", "Countries", "Cities", "Source_Types", "News_Sources", "News_Articles",
+      "Sentiment_Scores", "Severity_Levels", "Categories", "Event_Types", "Article_Analysis",
+      "GTI_Records", "GTI_History", "Risk_Thresholds", "Asset_Types", "Assets", "Asset_Prices",
+      "Market_Impact", "Roles", "Users", "Watchlists", "Watchlist_Items", "Risk_Scores",
+      "Trend_Analysis", "GTI_Alerts",
+    ],
+  });
+});
+
+app.get("/api/tables/:name", async (req, res) => {
+  try {
+    const name = req.params.name;
+    const allowed = new Set([
+      "Regions", "Countries", "Cities", "Source_Types", "News_Sources", "News_Articles",
+      "Sentiment_Scores", "Severity_Levels", "Categories", "Event_Types", "Article_Analysis",
+      "GTI_Records", "GTI_History", "Risk_Thresholds", "Asset_Types", "Assets", "Asset_Prices",
+      "Market_Impact", "Roles", "Users", "Watchlists", "Watchlist_Items", "Risk_Scores",
+      "Trend_Analysis", "GTI_Alerts",
+    ]);
+    if (!allowed.has(name)) {
+      return res.status(400).json({ error: "Invalid table name" });
+    }
+    const [rows] = await pool.query(`SELECT * FROM ${name} LIMIT 500`);
+    return res.json({ table: name, rows });
+  } catch (error) {
+    return res.status(500).json({ error: "Table query failed", details: error.message });
   }
 });
 

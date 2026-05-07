@@ -30,6 +30,7 @@
         <button class="screen-tab tab-idle" data-screen="news">News</button>
         <button class="screen-tab tab-idle" data-screen="market">Market</button>
         <button class="screen-tab tab-idle" data-screen="watchlist">Watchlist</button>
+        <button class="screen-tab tab-idle" data-screen="tables">Tables</button>
       </nav>
       <p class="text-[9px] text-cyan-400 font-bold">ANALYST_042</p>
     </div>
@@ -110,12 +111,39 @@
     <section id="screen-watchlist" class="screen hidden panel p-4">
       <h2 class="text-2xl font-semibold mb-1">Watchlist Screen</h2>
       <p class="text-[10px] muted uppercase tracking-[0.2em] mb-4">User watchlist assets</p>
+      <form id="watchlist-form" class="panel p-3 mb-4 flex flex-wrap gap-2 items-end">
+        <div>
+          <label for="watchlist-id" class="block text-[10px] muted uppercase mb-1">Watchlist ID</label>
+          <input id="watchlist-id" type="number" min="1" class="bg-black border border-white/10 rounded px-2 py-1 text-sm" placeholder="1" required />
+        </div>
+        <div>
+          <label for="asset-name" class="block text-[10px] muted uppercase mb-1">Asset Name</label>
+          <input id="asset-name" type="text" class="bg-black border border-white/10 rounded px-2 py-1 text-sm" placeholder="Gold" required />
+        </div>
+        <button type="submit" class="bg-cyan-500 text-black font-semibold px-3 py-1 rounded text-sm">Add</button>
+        <p id="watchlist-form-status" class="text-xs muted"></p>
+      </form>
       <div class="overflow-auto">
         <table class="w-full text-left">
           <thead class="text-[10px] uppercase tracking-[0.18em] muted border-b border-white/10">
             <tr><th class="py-2">User</th><th>Watchlist</th><th>Symbol</th><th>Asset</th><th class="text-right">Price</th><th class="text-right">Timestamp</th></tr>
           </thead>
           <tbody id="watchlist-table"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="screen-tables" class="screen hidden panel p-4">
+      <h2 class="text-2xl font-semibold mb-1">Database Tables</h2>
+      <p class="text-[10px] muted uppercase tracking-[0.2em] mb-4">All GeoTradeX tables and values</p>
+      <div class="flex gap-2 items-center mb-3">
+        <select id="table-select" class="bg-black border border-white/10 rounded px-2 py-1 text-sm"></select>
+        <button id="load-table-btn" class="bg-cyan-500 text-black font-semibold px-3 py-1 rounded text-sm">Load</button>
+      </div>
+      <div class="overflow-auto max-h-[65vh]">
+        <table class="w-full text-left">
+          <thead id="table-head" class="text-[10px] uppercase tracking-[0.18em] muted border-b border-white/10"></thead>
+          <tbody id="table-body"></tbody>
         </table>
       </div>
     </section>
@@ -143,6 +171,17 @@
     async function getJson(url) {
       const res = await fetch(url);
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Failed: ${url}`);
+      return data;
+    }
+
+    async function postJson(url, payload) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `Failed: ${url}`);
       return data;
     }
@@ -258,9 +297,70 @@
       `).join("") || `<tr><td colspan="6" class="py-3 muted">No rows found.</td></tr>`;
     }
 
-    Promise.all([loadDashboard(), loadNews(), loadMarket(), loadWatchlist()])
+    const watchlistForm = document.getElementById("watchlist-form");
+    watchlistForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const status = document.getElementById("watchlist-form-status");
+      const watchlistId = Number(document.getElementById("watchlist-id").value);
+      const assetName = document.getElementById("asset-name").value.trim();
+
+      status.className = "text-xs muted";
+      status.textContent = "Saving...";
+
+      try {
+        await postJson("/api/watchlist-items", {
+          watchlist_id: watchlistId,
+          asset_name: assetName,
+        });
+        status.className = "text-xs num-positive";
+        status.textContent = "Added successfully";
+        watchlistForm.reset();
+        await loadWatchlist();
+        await loadDashboard();
+      } catch (error) {
+        status.className = "text-xs num-negative";
+        status.textContent = error.message;
+      }
+    });
+
+    async function loadTableNames() {
+      const d = await getJson("/api/tables");
+      const select = document.getElementById("table-select");
+      select.innerHTML = (d.tables || []).map((name) => `<option value="${esc(name)}">${esc(name)}</option>`).join("");
+      if (d.tables && d.tables.length) {
+        await loadTableData(d.tables[0]);
+      }
+    }
+
+    async function loadTableData(name) {
+      const d = await getJson(`/api/tables/${encodeURIComponent(name)}`);
+      const rows = d.rows || [];
+      const head = document.getElementById("table-head");
+      const body = document.getElementById("table-body");
+
+      if (!rows.length) {
+        head.innerHTML = "";
+        body.innerHTML = `<tr><td class="py-3 muted">No rows found in ${esc(name)}.</td></tr>`;
+        return;
+      }
+
+      const cols = Object.keys(rows[0]);
+      head.innerHTML = `<tr>${cols.map((c) => `<th class="py-2 pr-4">${esc(c)}</th>`).join("")}</tr>`;
+      body.innerHTML = rows.map((row) => `
+        <tr class="border-b border-white/5">
+          ${cols.map((c) => `<td class="py-2 pr-4 text-[12px]">${esc(row[c])}</td>`).join("")}
+        </tr>
+      `).join("");
+    }
+
+    document.getElementById("load-table-btn").addEventListener("click", async () => {
+      const name = document.getElementById("table-select").value;
+      await loadTableData(name);
+    });
+
+    Promise.all([loadDashboard(), loadNews(), loadMarket(), loadWatchlist(), loadTableNames()])
       .catch((e) => {
-        ["dashboard-news", "news-table", "market-grid", "watchlist-table", "dashboard-market", "dashboard-watchlist"]
+        ["dashboard-news", "news-table", "market-grid", "watchlist-table", "dashboard-market", "dashboard-watchlist", "table-body"]
           .forEach((id) => {
             const el = document.getElementById(id);
             if (el) el.innerHTML = `<div class="text-rose-300">${esc(e.message)}</div>`;
