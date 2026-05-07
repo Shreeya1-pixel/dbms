@@ -30,6 +30,7 @@
         <button class="screen-tab tab-idle" data-screen="news">News</button>
         <button class="screen-tab tab-idle" data-screen="market">Market</button>
         <button class="screen-tab tab-idle" data-screen="watchlist">Watchlist</button>
+        <button class="screen-tab tab-idle" data-screen="trades">Trades</button>
         <button class="screen-tab tab-idle" data-screen="tables">Tables</button>
       </nav>
       <p class="text-[9px] text-cyan-400 font-bold">ANALYST_042</p>
@@ -144,6 +145,34 @@
         <table class="w-full text-left">
           <thead id="table-head" class="text-[10px] uppercase tracking-[0.18em] muted border-b border-white/10"></thead>
           <tbody id="table-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="screen-trades" class="screen hidden panel p-4">
+      <h2 class="text-2xl font-semibold mb-1">User Trades</h2>
+      <p class="text-[10px] muted uppercase tracking-[0.2em] mb-4">Store simple user trade inputs</p>
+      <form id="trade-form" class="panel p-3 mb-4 grid md:grid-cols-3 lg:grid-cols-4 gap-2">
+        <input id="trade-user-id" type="number" min="1" placeholder="User ID (optional)" class="bg-black border border-white/10 rounded px-2 py-1 text-sm" />
+        <input id="trade-user-name" type="text" placeholder="User Name (optional)" class="bg-black border border-white/10 rounded px-2 py-1 text-sm" />
+        <input id="trade-date" type="date" class="bg-black border border-white/10 rounded px-2 py-1 text-sm" required />
+        <input id="trade-type" type="text" placeholder="BUY / SELL" class="bg-black border border-white/10 rounded px-2 py-1 text-sm uppercase" required />
+        <input id="trade-asset" type="text" placeholder="Asset Name" class="bg-black border border-white/10 rounded px-2 py-1 text-sm" required />
+        <input id="trade-qty" type="number" step="0.01" placeholder="Quantity" class="bg-black border border-white/10 rounded px-2 py-1 text-sm" required />
+        <input id="trade-price" type="number" step="0.01" placeholder="Trade Price" class="bg-black border border-white/10 rounded px-2 py-1 text-sm" required />
+        <input id="trade-notes" type="text" placeholder="Notes (optional)" class="bg-black border border-white/10 rounded px-2 py-1 text-sm" />
+        <button type="submit" class="bg-cyan-500 text-black font-semibold px-3 py-1 rounded text-sm">Save Trade</button>
+        <p id="trade-form-status" class="text-xs muted col-span-full"></p>
+      </form>
+      <div class="overflow-auto">
+        <table class="w-full text-left">
+          <thead class="text-[10px] uppercase tracking-[0.18em] muted border-b border-white/10">
+            <tr>
+              <th class="py-2">Trade ID</th><th>User</th><th>Date</th><th>Type</th><th>Asset</th>
+              <th class="text-right">Qty</th><th class="text-right">Price</th><th>Notes</th>
+            </tr>
+          </thead>
+          <tbody id="trades-table"></tbody>
         </table>
       </div>
     </section>
@@ -353,14 +382,59 @@
       `).join("");
     }
 
+    async function loadTrades() {
+      const d = await getJson("/api/trades");
+      document.getElementById("trades-table").innerHTML = (d.rows || []).map((r) => `
+        <tr class="border-b border-white/5">
+          <td class="py-2">${esc(r.trade_id)}</td>
+          <td class="py-2">${esc(r.user_name)} (#${esc(r.user_id)})</td>
+          <td class="py-2">${esc(r.trade_date)}</td>
+          <td class="py-2">${esc(r.trade_type)}</td>
+          <td class="py-2">${esc(r.asset_name)}</td>
+          <td class="py-2 text-right">${Number(r.quantity).toFixed(2)}</td>
+          <td class="py-2 text-right">${Number(r.trade_price).toFixed(2)}</td>
+          <td class="py-2">${esc(r.notes || "")}</td>
+        </tr>
+      `).join("") || `<tr><td colspan="8" class="py-3 muted">No trades yet.</td></tr>`;
+    }
+
     document.getElementById("load-table-btn").addEventListener("click", async () => {
       const name = document.getElementById("table-select").value;
       await loadTableData(name);
     });
 
-    Promise.all([loadDashboard(), loadNews(), loadMarket(), loadWatchlist(), loadTableNames()])
+    document.getElementById("trade-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const status = document.getElementById("trade-form-status");
+      status.className = "text-xs muted col-span-full";
+      status.textContent = "Saving...";
+
+      const payload = {
+        user_id: document.getElementById("trade-user-id").value || null,
+        user_name: document.getElementById("trade-user-name").value.trim(),
+        trade_date: document.getElementById("trade-date").value,
+        trade_type: document.getElementById("trade-type").value.trim(),
+        asset_name: document.getElementById("trade-asset").value.trim(),
+        quantity: document.getElementById("trade-qty").value,
+        trade_price: document.getElementById("trade-price").value,
+        notes: document.getElementById("trade-notes").value.trim(),
+      };
+
+      try {
+        await postJson("/api/trades", payload);
+        status.className = "text-xs num-positive col-span-full";
+        status.textContent = "Trade saved.";
+        document.getElementById("trade-form").reset();
+        await loadTrades();
+      } catch (error) {
+        status.className = "text-xs num-negative col-span-full";
+        status.textContent = error.message;
+      }
+    });
+
+    Promise.all([loadDashboard(), loadNews(), loadMarket(), loadWatchlist(), loadTableNames(), loadTrades()])
       .catch((e) => {
-        ["dashboard-news", "news-table", "market-grid", "watchlist-table", "dashboard-market", "dashboard-watchlist", "table-body"]
+        ["dashboard-news", "news-table", "market-grid", "watchlist-table", "dashboard-market", "dashboard-watchlist", "table-body", "trades-table"]
           .forEach((id) => {
             const el = document.getElementById(id);
             if (el) el.innerHTML = `<div class="text-rose-300">${esc(e.message)}</div>`;

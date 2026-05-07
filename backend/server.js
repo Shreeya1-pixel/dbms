@@ -19,6 +19,27 @@ const pool = mysql.createPool({
   connectionLimit: 10,
 });
 
+async function ensureUserTradesTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS User_Trades (
+      trade_id INT PRIMARY KEY AUTO_INCREMENT,
+      user_id INT NOT NULL,
+      trade_date DATE NOT NULL,
+      trade_type VARCHAR(30) NOT NULL,
+      asset_name VARCHAR(80) NOT NULL,
+      quantity FLOAT NOT NULL,
+      trade_price FLOAT NOT NULL,
+      notes VARCHAR(255),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES Users(user_id)
+    )
+  `);
+}
+
+ensureUserTradesTable().catch((error) => {
+  console.error("Failed to ensure User_Trades table:", error.message);
+});
+
 app.get("/api/dashboard", async (_req, res) => {
   try {
     const [regions] = await pool.query(
@@ -244,7 +265,7 @@ app.get("/api/tables", (_req, res) => {
       "Sentiment_Scores", "Severity_Levels", "Categories", "Event_Types", "Article_Analysis",
       "GTI_Records", "GTI_History", "Risk_Thresholds", "Asset_Types", "Assets", "Asset_Prices",
       "Market_Impact", "Roles", "Users", "Watchlists", "Watchlist_Items", "Risk_Scores",
-      "Trend_Analysis", "GTI_Alerts",
+      "Trend_Analysis", "GTI_Alerts", "User_Trades",
     ],
   });
 });
@@ -257,7 +278,7 @@ app.get("/api/tables/:name", async (req, res) => {
       "Sentiment_Scores", "Severity_Levels", "Categories", "Event_Types", "Article_Analysis",
       "GTI_Records", "GTI_History", "Risk_Thresholds", "Asset_Types", "Assets", "Asset_Prices",
       "Market_Impact", "Roles", "Users", "Watchlists", "Watchlist_Items", "Risk_Scores",
-      "Trend_Analysis", "GTI_Alerts",
+      "Trend_Analysis", "GTI_Alerts", "User_Trades",
     ]);
     if (!allowed.has(name)) {
       return res.status(400).json({ error: "Invalid table name" });
@@ -266,6 +287,81 @@ app.get("/api/tables/:name", async (req, res) => {
     return res.json({ table: name, rows });
   } catch (error) {
     return res.status(500).json({ error: "Table query failed", details: error.message });
+  }
+});
+
+app.get("/api/trades", async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT t.trade_id, t.trade_date, t.trade_type, t.asset_name, t.quantity, t.trade_price, t.notes, t.created_at,
+              u.user_id, u.user_name
+       FROM User_Trades t
+       JOIN Users u ON u.user_id = t.user_id
+       ORDER BY t.trade_id DESC
+       LIMIT 200`
+    );
+    return res.json({ rows });
+  } catch (error) {
+    return res.status(500).json({ error: "Trades query failed", details: error.message });
+  }
+});
+
+app.post("/api/trades", async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const userIdInput = req.body?.user_id == null ? null : Number(req.body.user_id);
+    const userNameInput = String(req.body?.user_name || "").trim();
+    const tradeDate = String(req.body?.trade_date || "").trim();
+    const tradeType = String(req.body?.trade_type || "").trim().toUpperCase();
+    const assetName = String(req.body?.asset_name || "").trim();
+    const quantity = Number(req.body?.quantity);
+    const tradePrice = Number(req.body?.trade_price);
+    const notes = String(req.body?.notes || "").trim();
+
+    if (!tradeDate || !tradeType || !assetName || !Number.isFinite(quantity) || !Number.isFinite(tradePrice)) {
+      conn.release();
+      return res.status(400).json({
+        error: "trade_date, trade_type, asset_name, quantity, and trade_price are required",
+      });
+    }
+
+    await conn.beginTransaction();
+
+    let userId = userIdInput;
+
+    if (userId) {
+      const [existing] = await conn.query("SELECT user_id FROM Users WHERE user_id = ? LIMIT 1", [userId]);
+      if (!existing.length) {
+        throw new Error("User not found for provided user_id");
+      }
+    } else if (userNameInput) {
+      const [existingByName] = await conn.query("SELECT user_id FROM Users WHERE user_name = ? LIMIT 1", [userNameInput]);
+      if (existingByName.length) {
+        userId = existingByName[0].user_id;
+      } else {
+        const [nextIdRows] = await conn.query("SELECT IFNULL(MAX(user_id), 0) + 1 AS next_id FROM Users");
+        userId = nextIdRows[0].next_id;
+        await conn.query("INSERT INTO Users (user_id, user_name, role_id) VALUES (?, ?, 1)", [userId, userNameInput]);
+      }
+    } else {
+      throw new Error("Provide either user_id or user_name");
+    }
+
+    const [result] = await conn.query(
+      `INSERT INTO User_Trades (user_id, trade_date, trade_type, asset_name, quantity, trade_price, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [userId, tradeDate, tradeType, assetName, quantity, tradePrice, notes || null]
+    );
+
+    await conn.commit();
+    conn.release();
+    return res.status(201).json({ ok: true, trade_id: result.insertId, user_id: userId });
+  } catch (error) {
+    try {
+      await conn.rollback();
+    } catch {}
+    conn.release();
+    return res.status(500).json({ error: "Failed to save trade", details: error.message });
   }
 });
 

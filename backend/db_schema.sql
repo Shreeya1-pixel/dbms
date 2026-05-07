@@ -187,6 +187,19 @@ CREATE TABLE GTI_Alerts (
    FOREIGN KEY (region_id) REFERENCES Regions(region_id)
 );
 
+CREATE TABLE User_Trades (
+   trade_id INT PRIMARY KEY AUTO_INCREMENT,
+   user_id INT NOT NULL,
+   trade_date DATE NOT NULL,
+   trade_type VARCHAR(30) NOT NULL,
+   asset_name VARCHAR(80) NOT NULL,
+   quantity FLOAT NOT NULL,
+   trade_price FLOAT NOT NULL,
+   notes VARCHAR(255),
+   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+   FOREIGN KEY (user_id) REFERENCES Users(user_id)
+);
+
 DELIMITER //
 
 CREATE FUNCTION Get_Severity_Weight(sid INT)
@@ -422,3 +435,7 @@ CALL bulk_analysis();
 CALL bulk_prices();
 CALL bulk_users();
 CALL bulk_impact();
+
+INSERT INTO User_Trades (user_id, trade_date, trade_type, asset_name, quantity, trade_price, notes) VALUES
+(1, CURDATE(), 'BUY', 'Gold', 2, 2045.50, 'Initial sample trade'),
+(2, CURDATE(), 'SELL', 'Bitcoin', 0.2, 62000.00, 'Initial sample trade');
