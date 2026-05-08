@@ -23,7 +23,6 @@
 </head>
 <body class="min-h-screen">
 
-  <!-- LOGIN PAGE -->
   <div id="login-page" class="min-h-screen flex items-center justify-center px-4">
     <div class="panel p-8 w-full max-w-sm space-y-5">
       <div>
@@ -38,7 +37,6 @@
       </div>
       <p id="login-status" class="text-xs muted"></p>
 
-      <!-- REGISTER FORM (hidden by default) -->
       <div id="register-form" class="hidden space-y-3 border-t border-white/10 pt-4">
         <p class="text-[10px] muted uppercase tracking-widest">New Account</p>
         <input id="reg-username" type="text" placeholder="Username" class="w-full bg-black border border-white/10 rounded px-3 py-2 text-sm" />
@@ -54,7 +52,6 @@
     </div>
   </div>
 
-  <!-- MAIN APP (hidden until logged in) -->
   <div id="app" class="hidden">
   <header class="h-12 border-b border-white/10 bg-black/95 fixed top-0 left-0 right-0 z-50">
     <div class="max-w-[1600px] h-full mx-auto px-6 flex items-center justify-between">
@@ -583,6 +580,6 @@
       openScreen("dashboard");
     });
   </script>
-  </div><!-- end #app -->
+  </div>
 </body>
 </html>
