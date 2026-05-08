@@ -463,3 +463,11 @@ GRANT analyst_role TO 'analyst1'@'localhost';
 
 -- Example REVOKE (easy demo):
 -- REVOKE SELECT ON GeoTradeX.* FROM analyst_role;
+
+CREATE TABLE IF NOT EXISTS App_Users (
+  app_user_id INT PRIMARY KEY AUTO_INCREMENT,
+  username VARCHAR(60) NOT NULL UNIQUE,
+  password VARCHAR(100) NOT NULL,
+  role ENUM('admin','analyst','viewer') NOT NULL DEFAULT 'viewer',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

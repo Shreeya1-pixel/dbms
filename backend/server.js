@@ -67,6 +67,92 @@ ensureViewAndRole().catch((error) => {
   console.error("Failed to ensure view/role objects:", error.message);
 });
 
+async function ensureAppUsers() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS App_Users (
+      app_user_id INT PRIMARY KEY AUTO_INCREMENT,
+      username VARCHAR(60) NOT NULL UNIQUE,
+      password VARCHAR(100) NOT NULL,
+      role ENUM('admin','analyst','viewer') NOT NULL DEFAULT 'viewer',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await pool.query(`
+    INSERT IGNORE INTO App_Users (username, password, role) VALUES
+    ('admin', 'admin123', 'admin'),
+    ('analyst1', 'pass123', 'analyst'),
+    ('viewer1', 'pass123', 'viewer')
+  `);
+}
+
+ensureAppUsers().catch((error) => {
+  console.error("Failed to ensure App_Users table:", error.message);
+});
+
+app.post("/api/register", async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const username = String(req.body?.username || "").trim();
+    const password = String(req.body?.password || "").trim();
+    const role = String(req.body?.role || "viewer").trim();
+
+    if (!username || !password) {
+      conn.release();
+      return res.status(400).json({ error: "username and password are required" });
+    }
+    if (!["admin", "analyst", "viewer"].includes(role)) {
+      conn.release();
+      return res.status(400).json({ error: "role must be admin, analyst, or viewer" });
+    }
+
+    await conn.beginTransaction();
+    await conn.query(
+      "INSERT INTO App_Users (username, password, role) VALUES (?, ?, ?)",
+      [username, password, role]
+    );
+    await conn.commit();
+    conn.release();
+    return res.status(201).json({ ok: true, message: "User registered" });
+  } catch (error) {
+    try { await conn.rollback(); } catch {}
+    conn.release();
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ error: "Username already exists" });
+    }
+    return res.status(500).json({ error: "Registration failed", details: error.message });
+  }
+});
+
+app.post("/api/login", async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const username = String(req.body?.username || "").trim();
+    const password = String(req.body?.password || "").trim();
+
+    if (!username || !password) {
+      conn.release();
+      return res.status(400).json({ error: "username and password are required" });
+    }
+
+    await conn.beginTransaction();
+    const [rows] = await conn.query(
+      "SELECT app_user_id, username, role FROM App_Users WHERE username = ? AND password = ? LIMIT 1",
+      [username, password]
+    );
+    await conn.commit();
+    conn.release();
+
+    if (!rows.length) {
+      return res.status(401).json({ error: "Invalid username or password" });
+    }
+    return res.json({ ok: true, user: rows[0] });
+  } catch (error) {
+    try { await conn.rollback(); } catch {}
+    conn.release();
+    return res.status(500).json({ error: "Login failed", details: error.message });
+  }
+});
+
 app.get("/api/dashboard", async (_req, res) => {
   try {
     const [regions] = await pool.query(

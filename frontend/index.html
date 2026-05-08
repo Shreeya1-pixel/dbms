@@ -22,18 +22,55 @@
   </style>
 </head>
 <body class="min-h-screen">
+
+  <!-- LOGIN PAGE -->
+  <div id="login-page" class="min-h-screen flex items-center justify-center px-4">
+    <div class="panel p-8 w-full max-w-sm space-y-5">
+      <div>
+        <h1 class="text-2xl font-black tracking-tight">GEOTRADE-X</h1>
+        <p class="text-[10px] muted uppercase tracking-[0.2em] mt-1">Sign in to continue</p>
+      </div>
+      <input id="login-username" type="text" placeholder="Username" class="w-full bg-black border border-white/10 rounded px-3 py-2 text-sm" />
+      <input id="login-password" type="password" placeholder="Password" class="w-full bg-black border border-white/10 rounded px-3 py-2 text-sm" />
+      <div class="flex gap-2 items-center">
+        <button id="login-btn" class="flex-1 bg-cyan-500 text-black font-semibold rounded px-3 py-2 text-sm">Login</button>
+        <button id="show-register-btn" class="flex-1 border border-white/10 rounded px-3 py-2 text-sm muted">Register</button>
+      </div>
+      <p id="login-status" class="text-xs muted"></p>
+
+      <!-- REGISTER FORM (hidden by default) -->
+      <div id="register-form" class="hidden space-y-3 border-t border-white/10 pt-4">
+        <p class="text-[10px] muted uppercase tracking-widest">New Account</p>
+        <input id="reg-username" type="text" placeholder="Username" class="w-full bg-black border border-white/10 rounded px-3 py-2 text-sm" />
+        <input id="reg-password" type="password" placeholder="Password" class="w-full bg-black border border-white/10 rounded px-3 py-2 text-sm" />
+        <select id="reg-role" class="w-full bg-black border border-white/10 rounded px-3 py-2 text-sm">
+          <option value="viewer">Viewer — Dashboard &amp; News only</option>
+          <option value="analyst">Analyst — All screens</option>
+          <option value="admin">Admin — All screens + Role panel</option>
+        </select>
+        <button id="register-btn" class="w-full bg-emerald-600 text-white font-semibold rounded px-3 py-2 text-sm">Create Account</button>
+        <p id="reg-status" class="text-xs muted"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN APP (hidden until logged in) -->
+  <div id="app" class="hidden">
   <header class="h-12 border-b border-white/10 bg-black/95 fixed top-0 left-0 right-0 z-50">
     <div class="max-w-[1600px] h-full mx-auto px-6 flex items-center justify-between">
       <h1 class="text-sm font-black tracking-tight">GEOTRADE-X</h1>
-      <nav class="flex gap-7 text-[10px] uppercase font-semibold tracking-wide">
+      <nav id="main-nav" class="flex gap-7 text-[10px] uppercase font-semibold tracking-wide">
         <button class="screen-tab tab-active" data-screen="dashboard">Dashboard</button>
         <button class="screen-tab tab-idle" data-screen="news">News</button>
-        <button class="screen-tab tab-idle" data-screen="market">Market</button>
-        <button class="screen-tab tab-idle" data-screen="watchlist">Watchlist</button>
-        <button class="screen-tab tab-idle" data-screen="trades">Trades</button>
-        <button class="screen-tab tab-idle" data-screen="tables">Tables</button>
+        <button class="screen-tab tab-idle nav-analyst" data-screen="market">Market</button>
+        <button class="screen-tab tab-idle nav-analyst" data-screen="watchlist">Watchlist</button>
+        <button class="screen-tab tab-idle nav-analyst" data-screen="trades">Trades</button>
+        <button class="screen-tab tab-idle nav-admin" data-screen="tables">Tables</button>
       </nav>
-      <p class="text-[9px] text-cyan-400 font-bold">ANALYST_042</p>
+      <div class="flex items-center gap-3">
+        <p id="logged-in-user" class="text-[9px] text-cyan-400 font-bold"></p>
+        <button id="logout-btn" class="text-[9px] text-slate-500 hover:text-white uppercase">Logout</button>
+      </div>
     </div>
   </header>
 
@@ -468,14 +505,84 @@
       }
     });
 
-    Promise.all([loadDashboard(), loadNews(), loadMarket(), loadWatchlist(), loadTableNames(), loadTrades(), loadRegionRiskView(), loadRoleGrants()])
-      .catch((e) => {
-        ["dashboard-news", "news-table", "market-grid", "watchlist-table", "dashboard-market", "dashboard-watchlist", "table-body", "trades-table", "region-risk-body", "role-grants-box"]
-          .forEach((id) => {
-            const el = document.getElementById(id);
-            if (el) el.innerHTML = `<div class="text-rose-300">${esc(e.message)}</div>`;
-          });
-      });
+    function applyRole(role) {
+      const analystTabs = document.querySelectorAll(".nav-analyst");
+      const adminTabs   = document.querySelectorAll(".nav-admin");
+      if (role === "viewer") {
+        analystTabs.forEach((el) => el.classList.add("hidden"));
+        adminTabs.forEach((el) => el.classList.add("hidden"));
+      } else if (role === "analyst") {
+        analystTabs.forEach((el) => el.classList.remove("hidden"));
+        adminTabs.forEach((el) => el.classList.add("hidden"));
+      } else if (role === "admin") {
+        analystTabs.forEach((el) => el.classList.remove("hidden"));
+        adminTabs.forEach((el) => el.classList.remove("hidden"));
+      }
+    }
+
+    function startApp(user) {
+      document.getElementById("login-page").classList.add("hidden");
+      document.getElementById("app").classList.remove("hidden");
+      document.getElementById("logged-in-user").textContent =
+        `${user.username.toUpperCase()} · ${user.role.toUpperCase()}`;
+      applyRole(user.role);
+
+      Promise.all([loadDashboard(), loadNews(), loadMarket(), loadWatchlist(), loadTableNames(), loadTrades(), loadRegionRiskView(), loadRoleGrants()])
+        .catch((e) => {
+          ["dashboard-news", "news-table", "market-grid", "watchlist-table", "dashboard-market", "dashboard-watchlist", "table-body", "trades-table", "region-risk-body", "role-grants-box"]
+            .forEach((id) => {
+              const el = document.getElementById(id);
+              if (el) el.innerHTML = `<div class="text-rose-300">${esc(e.message)}</div>`;
+            });
+        });
+    }
+
+    document.getElementById("login-btn").addEventListener("click", async () => {
+      const status = document.getElementById("login-status");
+      const username = document.getElementById("login-username").value.trim();
+      const password = document.getElementById("login-password").value.trim();
+      status.textContent = "Signing in...";
+      status.className = "text-xs muted";
+      try {
+        const d = await postJson("/api/login", { username, password });
+        status.textContent = "";
+        startApp(d.user);
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "text-xs num-negative";
+      }
+    });
+
+    document.getElementById("show-register-btn").addEventListener("click", () => {
+      document.getElementById("register-form").classList.toggle("hidden");
+    });
+
+    document.getElementById("register-btn").addEventListener("click", async () => {
+      const status = document.getElementById("reg-status");
+      const username = document.getElementById("reg-username").value.trim();
+      const password = document.getElementById("reg-password").value.trim();
+      const role = document.getElementById("reg-role").value;
+      status.textContent = "Creating account...";
+      status.className = "text-xs muted";
+      try {
+        await postJson("/api/register", { username, password, role });
+        status.textContent = "Account created — you can now login.";
+        status.className = "text-xs num-positive";
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "text-xs num-negative";
+      }
+    });
+
+    document.getElementById("logout-btn").addEventListener("click", () => {
+      document.getElementById("app").classList.add("hidden");
+      document.getElementById("login-page").classList.remove("hidden");
+      document.getElementById("login-username").value = "";
+      document.getElementById("login-password").value = "";
+      document.getElementById("login-status").textContent = "";
+      openScreen("dashboard");
+    });
   </script>
+  </div><!-- end #app -->
 </body>
 </html>
