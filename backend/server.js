@@ -24,14 +24,15 @@ async function ensureUserTradesTable() {
     CREATE TABLE IF NOT EXISTS User_Trades (
       trade_id INT PRIMARY KEY AUTO_INCREMENT,
       user_id INT NOT NULL,
+      asset_id INT NOT NULL,
       trade_date DATE NOT NULL,
       trade_type VARCHAR(30) NOT NULL,
-      asset_name VARCHAR(80) NOT NULL,
       quantity FLOAT NOT NULL,
       trade_price FLOAT NOT NULL,
       notes VARCHAR(255),
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES Users(user_id)
+      FOREIGN KEY (user_id) REFERENCES Users(user_id),
+      FOREIGN KEY (asset_id) REFERENCES Assets(asset_id)
     )
   `);
 }
@@ -69,19 +70,24 @@ ensureViewAndRole().catch((error) => {
 
 async function ensureAppUsers() {
   await pool.query(`
+    INSERT IGNORE INTO Roles (role_id, role_name) VALUES
+    (1, 'admin'), (2, 'analyst'), (3, 'viewer')
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS App_Users (
       app_user_id INT PRIMARY KEY AUTO_INCREMENT,
       username VARCHAR(60) NOT NULL UNIQUE,
       password VARCHAR(100) NOT NULL,
-      role ENUM('admin','analyst','viewer') NOT NULL DEFAULT 'viewer',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      role_id INT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (role_id) REFERENCES Roles(role_id)
     )
   `);
   await pool.query(`
-    INSERT IGNORE INTO App_Users (username, password, role) VALUES
-    ('admin', 'admin123', 'admin'),
-    ('analyst1', 'pass123', 'analyst'),
-    ('viewer1', 'pass123', 'viewer')
+    INSERT IGNORE INTO App_Users (username, password, role_id) VALUES
+    ('admin', 'admin123', 1),
+    ('analyst1', 'pass123', 2),
+    ('viewer1', 'pass123', 3)
   `);
 }
 
@@ -89,26 +95,29 @@ ensureAppUsers().catch((error) => {
   console.error("Failed to ensure App_Users table:", error.message);
 });
 
+const APP_ROLE_IDS = { admin: 1, analyst: 2, viewer: 3 };
+
 app.post("/api/register", async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const username = String(req.body?.username || "").trim();
     const password = String(req.body?.password || "").trim();
-    const role = String(req.body?.role || "viewer").trim();
+    const roleKey = String(req.body?.role || "viewer").trim().toLowerCase();
 
     if (!username || !password) {
       conn.release();
       return res.status(400).json({ error: "username and password are required" });
     }
-    if (!["admin", "analyst", "viewer"].includes(role)) {
+    const roleId = APP_ROLE_IDS[roleKey];
+    if (!roleId) {
       conn.release();
       return res.status(400).json({ error: "role must be admin, analyst, or viewer" });
     }
 
     await conn.beginTransaction();
     await conn.query(
-      "INSERT INTO App_Users (username, password, role) VALUES (?, ?, ?)",
-      [username, password, role]
+      "INSERT INTO App_Users (username, password, role_id) VALUES (?, ?, ?)",
+      [username, password, roleId]
     );
     await conn.commit();
     conn.release();
@@ -136,7 +145,11 @@ app.post("/api/login", async (req, res) => {
 
     await conn.beginTransaction();
     const [rows] = await conn.query(
-      "SELECT app_user_id, username, role FROM App_Users WHERE username = ? AND password = ? LIMIT 1",
+      `SELECT u.app_user_id, u.username, LOWER(r.role_name) AS role
+       FROM App_Users u
+       JOIN Roles r ON r.role_id = u.role_id
+       WHERE u.username = ? AND u.password = ?
+       LIMIT 1`,
       [username, password]
     );
     await conn.commit();
@@ -175,11 +188,14 @@ app.get("/api/dashboard", async (_req, res) => {
               a.title,
               r.name AS region_name,
               c.category_name,
-              aa.sentiment_score AS sentiment,
+              ss.score_value AS sentiment,
               sv.level_name AS severity_name
        FROM Article_Analysis aa
        JOIN News_Articles a ON a.article_id = aa.article_id
-       JOIN Regions r ON r.region_id = a.region_id
+       JOIN News_Sources ns ON a.source_id = ns.source_id
+       JOIN Countries co ON ns.country_id = co.country_id
+       JOIN Regions r ON r.region_id = co.region_id
+       JOIN Sentiment_Scores ss ON ss.sentiment_id = aa.sentiment_id
        JOIN Severity_Levels sv ON sv.severity_id = aa.severity_id
        JOIN Categories c ON c.category_id = aa.category_id
        ORDER BY a.publish_date DESC
@@ -245,11 +261,14 @@ app.get("/api/news", async (_req, res) => {
               a.title,
               r.name AS region_name,
               c.category_name,
-              aa.sentiment_score AS sentiment,
+              ss.score_value AS sentiment,
               sv.level_name AS severity_name
        FROM News_Articles a
        JOIN Article_Analysis aa ON aa.article_id = a.article_id
-       JOIN Regions r ON r.region_id = a.region_id
+       JOIN News_Sources ns ON a.source_id = ns.source_id
+       JOIN Countries co ON ns.country_id = co.country_id
+       JOIN Regions r ON r.region_id = co.region_id
+       JOIN Sentiment_Scores ss ON ss.sentiment_id = aa.sentiment_id
        JOIN Categories c ON c.category_id = aa.category_id
        JOIN Severity_Levels sv ON sv.severity_id = aa.severity_id
        ORDER BY a.publish_date DESC
@@ -419,10 +438,11 @@ app.get("/api/tables/:name", async (req, res) => {
 app.get("/api/trades", async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT t.trade_id, t.trade_date, t.trade_type, t.asset_name, t.quantity, t.trade_price, t.notes, t.created_at,
+      `SELECT t.trade_id, t.trade_date, t.trade_type, ast.name AS asset_name, t.quantity, t.trade_price, t.notes, t.created_at,
               u.user_id, u.user_name
        FROM User_Trades t
        JOIN Users u ON u.user_id = t.user_id
+       JOIN Assets ast ON ast.asset_id = t.asset_id
        ORDER BY t.trade_id DESC
        LIMIT 200`
     );
@@ -468,19 +488,50 @@ app.post("/api/trades", async (req, res) => {
     const userNameInput = String(req.body?.user_name || "").trim();
     const tradeDate = String(req.body?.trade_date || "").trim();
     const tradeType = String(req.body?.trade_type || "").trim().toUpperCase();
+    const assetIdInput = req.body?.asset_id == null || req.body?.asset_id === "" ? null : Number(req.body.asset_id);
     const assetName = String(req.body?.asset_name || "").trim();
     const quantity = Number(req.body?.quantity);
     const tradePrice = Number(req.body?.trade_price);
     const notes = String(req.body?.notes || "").trim();
 
-    if (!tradeDate || !tradeType || !assetName || !Number.isFinite(quantity) || !Number.isFinite(tradePrice)) {
+    if (!tradeDate || !tradeType || !Number.isFinite(quantity) || !Number.isFinite(tradePrice)) {
       conn.release();
       return res.status(400).json({
-        error: "trade_date, trade_type, asset_name, quantity, and trade_price are required",
+        error: "trade_date, trade_type, quantity, and trade_price are required",
+      });
+    }
+
+    const hasAssetId = Number.isFinite(assetIdInput) && assetIdInput > 0;
+    if (!hasAssetId && !assetName) {
+      conn.release();
+      return res.status(400).json({
+        error: "asset_id or asset_name is required",
       });
     }
 
     await conn.beginTransaction();
+
+    let assetId;
+    if (hasAssetId) {
+      const [byId] = await conn.query("SELECT asset_id FROM Assets WHERE asset_id = ? LIMIT 1", [assetIdInput]);
+      if (!byId.length) {
+        await conn.rollback();
+        conn.release();
+        return res.status(404).json({ error: "asset_id not found in Assets table" });
+      }
+      assetId = byId[0].asset_id;
+    } else {
+      const [assetRows] = await conn.query(
+        "SELECT asset_id FROM Assets WHERE name = ? LIMIT 1",
+        [assetName]
+      );
+      if (!assetRows.length) {
+        await conn.rollback();
+        conn.release();
+        return res.status(404).json({ error: "asset_name not found in Assets table" });
+      }
+      assetId = assetRows[0].asset_id;
+    }
 
     let userId = userIdInput;
 
@@ -496,16 +547,16 @@ app.post("/api/trades", async (req, res) => {
       } else {
         const [nextIdRows] = await conn.query("SELECT IFNULL(MAX(user_id), 0) + 1 AS next_id FROM Users");
         userId = nextIdRows[0].next_id;
-        await conn.query("INSERT INTO Users (user_id, user_name, role_id) VALUES (?, ?, 1)", [userId, userNameInput]);
+        await conn.query("INSERT INTO Users (user_id, user_name, role_id) VALUES (?, ?, 2)", [userId, userNameInput]);
       }
     } else {
       throw new Error("Provide either user_id or user_name");
     }
 
     const [result] = await conn.query(
-      `INSERT INTO User_Trades (user_id, trade_date, trade_type, asset_name, quantity, trade_price, notes)
+      `INSERT INTO User_Trades (user_id, asset_id, trade_date, trade_type, quantity, trade_price, notes)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [userId, tradeDate, tradeType, assetName, quantity, tradePrice, notes || null]
+      [userId, assetId, tradeDate, tradeType, quantity, tradePrice, notes || null]
     );
 
     await conn.commit();

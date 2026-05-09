@@ -39,9 +39,7 @@ CREATE TABLE News_Articles (
    title VARCHAR(200),
    publish_date DATE,
    source_id INT,
-   region_id INT,
-   FOREIGN KEY (source_id) REFERENCES News_Sources(source_id),
-   FOREIGN KEY (region_id) REFERENCES Regions(region_id)
+   FOREIGN KEY (source_id) REFERENCES News_Sources(source_id)
 );
 
 CREATE TABLE Sentiment_Scores (
@@ -69,7 +67,6 @@ CREATE TABLE Event_Types (
 CREATE TABLE Article_Analysis (
    analysis_id INT PRIMARY KEY,
    article_id INT,
-   sentiment_score FLOAT CHECK (sentiment_score BETWEEN -1 AND 1),
    sentiment_id INT,
    severity_id INT,
    category_id INT,
@@ -93,7 +90,6 @@ CREATE TABLE GTI_History (
    region_id INT,
    record_date DATE,
    index_value FLOAT,
-   risk_level VARCHAR(20),
    FOREIGN KEY (region_id) REFERENCES Regions(region_id)
 );
 
@@ -190,14 +186,15 @@ CREATE TABLE GTI_Alerts (
 CREATE TABLE User_Trades (
    trade_id INT PRIMARY KEY AUTO_INCREMENT,
    user_id INT NOT NULL,
+   asset_id INT NOT NULL,
    trade_date DATE NOT NULL,
    trade_type VARCHAR(30) NOT NULL,
-   asset_name VARCHAR(80) NOT NULL,
    quantity FLOAT NOT NULL,
    trade_price FLOAT NOT NULL,
    notes VARCHAR(255),
    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-   FOREIGN KEY (user_id) REFERENCES Users(user_id)
+   FOREIGN KEY (user_id) REFERENCES Users(user_id),
+   FOREIGN KEY (asset_id) REFERENCES Assets(asset_id)
 );
 
 DELIMITER //
@@ -240,7 +237,9 @@ BEGIN
    FROM Article_Analysis an
    JOIN Severity_Levels sl ON an.severity_id = sl.severity_id
    JOIN News_Articles na ON an.article_id = na.article_id
-   WHERE na.region_id = reg_id;
+   JOIN News_Sources ns ON na.source_id = ns.source_id
+   JOIN Countries c ON ns.country_id = c.country_id
+   WHERE c.region_id = reg_id;
    SET final_val = IFNULL(avg_val,0) * 10;
    INSERT INTO GTI_Records(region_id, record_date, index_value)
    VALUES (reg_id, CURDATE(), final_val);
@@ -274,7 +273,9 @@ BEGIN
       CURDATE()
    FROM Risk_Scores rs
    JOIN News_Articles na ON rs.article_id = na.article_id
-   WHERE na.region_id = reg;
+   JOIN News_Sources ns ON na.source_id = ns.source_id
+   JOIN Countries c ON ns.country_id = c.country_id
+   WHERE c.region_id = reg;
 END //
 
 DELIMITER ;
@@ -286,7 +287,11 @@ AFTER INSERT ON Article_Analysis
 FOR EACH ROW
 BEGIN
    DECLARE reg INT;
-   SELECT region_id INTO reg FROM News_Articles WHERE article_id = NEW.article_id;
+   SELECT c.region_id INTO reg
+   FROM News_Articles na
+   JOIN News_Sources ns ON na.source_id = ns.source_id
+   JOIN Countries c ON ns.country_id = c.country_id
+   WHERE na.article_id = NEW.article_id;
    CALL Calculate_GTI(reg);
 END //
 DELIMITER ;
@@ -305,7 +310,10 @@ END //
 
 DELIMITER ;
 
-INSERT INTO Roles VALUES (1, 'Analyst');
+INSERT INTO Roles VALUES
+(1, 'admin'),
+(2, 'analyst'),
+(3, 'viewer');
 
 INSERT INTO Regions VALUES
 (1,'Asia'),(2,'Europe'),(3,'Middle East'),(4,'Africa'),(5,'North America'),
@@ -365,8 +373,8 @@ CREATE PROCEDURE bulk_articles()
 BEGIN
    DECLARE i INT DEFAULT 1;
    WHILE i <= 200 DO
-       INSERT INTO News_Articles(article_id, title, publish_date, source_id, region_id)
-       VALUES (i, CONCAT('Geo Event ', i), DATE_SUB(CURDATE(), INTERVAL i DAY), (i % 3) + 1, (i % 25) + 1);
+       INSERT INTO News_Articles(article_id, title, publish_date, source_id)
+       VALUES (i, CONCAT('Geo Event ', i), DATE_SUB(CURDATE(), INTERVAL i DAY), (i % 3) + 1);
        SET i = i + 1;
    END WHILE;
 END //
@@ -379,8 +387,8 @@ CREATE PROCEDURE bulk_analysis()
 BEGIN
    DECLARE i INT DEFAULT 1;
    WHILE i <= 200 DO
-       INSERT INTO Article_Analysis(analysis_id, article_id, sentiment_score, severity_id, category_id, sentiment_id, intensity)
-       VALUES (i, i, (RAND()*2)-1, (i % 3) + 1, (i % 2) + 1, (i % 3) + 1, RAND()*10);
+       INSERT INTO Article_Analysis(analysis_id, article_id, severity_id, category_id, sentiment_id, intensity)
+       VALUES (i, i, (i % 3) + 1, (i % 2) + 1, (i % 3) + 1, RAND()*10);
        SET i = i + 1;
    END WHILE;
 END //
@@ -407,7 +415,7 @@ CREATE PROCEDURE bulk_users()
 BEGIN
    DECLARE i INT DEFAULT 1;
    WHILE i <= 100 DO
-       INSERT INTO Users(user_id, user_name, role_id) VALUES (i, CONCAT('User', i), 1);
+       INSERT INTO Users(user_id, user_name, role_id) VALUES (i, CONCAT('User', i), 2);
        INSERT INTO Watchlists(watchlist_id, user_id) VALUES (i, i);
        INSERT INTO Watchlist_Items(id, watchlist_id, asset_id) VALUES (i, i, (i % 25) + 1);
        SET i = i + 1;
@@ -436,9 +444,9 @@ CALL bulk_prices();
 CALL bulk_users();
 CALL bulk_impact();
 
-INSERT INTO User_Trades (user_id, trade_date, trade_type, asset_name, quantity, trade_price, notes) VALUES
-(1, CURDATE(), 'BUY', 'Gold', 2, 2045.50, 'Initial sample trade'),
-(2, CURDATE(), 'SELL', 'Bitcoin', 0.2, 62000.00, 'Initial sample trade');
+INSERT INTO User_Trades (user_id, asset_id, trade_date, trade_type, quantity, trade_price, notes) VALUES
+(1, 1, CURDATE(), 'BUY', 2, 2045.50, 'Initial sample trade'),
+(2, 4, CURDATE(), 'SELL', 0.2, 62000.00, 'Initial sample trade');
 
 CREATE OR REPLACE VIEW Region_Risk AS
 SELECT
@@ -465,6 +473,12 @@ CREATE TABLE IF NOT EXISTS App_Users (
   app_user_id INT PRIMARY KEY AUTO_INCREMENT,
   username VARCHAR(60) NOT NULL UNIQUE,
   password VARCHAR(100) NOT NULL,
-  role ENUM('admin','analyst','viewer') NOT NULL DEFAULT 'viewer',
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  role_id INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (role_id) REFERENCES Roles(role_id)
 );
+
+INSERT IGNORE INTO App_Users (username, password, role_id) VALUES
+('admin', 'admin123', 1),
+('analyst1', 'pass123', 2),
+('viewer1', 'pass123', 3);
