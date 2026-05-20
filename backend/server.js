@@ -19,6 +19,8 @@ const pool = mysql.createPool({
   connectionLimit: 10,
 });
 
+const ALERT_PCT = Number(process.env.ALERT_PCT || 5);
+
 async function ensureUserTradesTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS User_Trades (
@@ -40,6 +42,34 @@ async function ensureUserTradesTable() {
 ensureUserTradesTable().catch((error) => {
   console.error("Failed to ensure User_Trades table:", error.message);
 });
+
+async function ensureTradeAlertsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS Trade_Alerts (
+      alert_id INT PRIMARY KEY AUTO_INCREMENT,
+      trade_id INT NOT NULL,
+      user_id INT NOT NULL,
+      asset_id INT NOT NULL,
+      alert_type ENUM('PRICE_UP', 'PRICE_DOWN') NOT NULL,
+      trade_price FLOAT NOT NULL,
+      current_price FLOAT NOT NULL,
+      change_pct FLOAT NOT NULL,
+      message VARCHAR(255),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (trade_id) REFERENCES User_Trades(trade_id),
+      FOREIGN KEY (user_id) REFERENCES Users(user_id),
+      FOREIGN KEY (asset_id) REFERENCES Assets(asset_id)
+    )
+  `);
+}
+
+ensureTradeAlertsTable().catch((error) => {
+  console.error("Failed to ensure Trade_Alerts table:", error.message);
+});
+
+async function checkTradePriceAlert(conn, tradeId) {
+  await conn.query("CALL Check_Trade_Price_Alert(?, ?)", [tradeId, ALERT_PCT]);
+}
 
 async function ensureViewAndRole() {
   await pool.query(`
@@ -396,7 +426,7 @@ app.get("/api/tables", (_req, res) => {
     "Sentiment_Scores", "Severity_Levels", "Categories", "Event_Types", "Article_Analysis",
     "GTI_Records", "GTI_History", "Risk_Thresholds", "Asset_Types", "Assets", "Asset_Prices",
     "Market_Impact", "Roles", "Users", "Watchlists", "Watchlist_Items", "Risk_Scores",
-    "Trend_Analysis", "GTI_Alerts", "User_Trades",
+    "Trend_Analysis", "GTI_Alerts", "User_Trades", "Trade_Alerts",
   ];
 
   (async () => {
@@ -423,7 +453,7 @@ app.get("/api/tables/:name", async (req, res) => {
       "Sentiment_Scores", "Severity_Levels", "Categories", "Event_Types", "Article_Analysis",
       "GTI_Records", "GTI_History", "Risk_Thresholds", "Asset_Types", "Assets", "Asset_Prices",
       "Market_Impact", "Roles", "Users", "Watchlists", "Watchlist_Items", "Risk_Scores",
-      "Trend_Analysis", "GTI_Alerts", "User_Trades",
+      "Trend_Analysis", "GTI_Alerts", "User_Trades", "Trade_Alerts",
     ]);
     if (!allowed.has(name)) {
       return res.status(400).json({ error: "Invalid table name" });
@@ -449,6 +479,24 @@ app.get("/api/trades", async (_req, res) => {
     return res.json({ rows });
   } catch (error) {
     return res.status(500).json({ error: "Trades query failed", details: error.message });
+  }
+});
+
+app.get("/api/trade-alerts", async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT ta.alert_id, ta.trade_id, ta.alert_type, ta.trade_price, ta.current_price, ta.change_pct,
+              ta.message, ta.created_at, u.user_name, ast.name AS asset_name, t.trade_type
+       FROM Trade_Alerts ta
+       JOIN User_Trades t ON t.trade_id = ta.trade_id
+       JOIN Users u ON u.user_id = ta.user_id
+       JOIN Assets ast ON ast.asset_id = ta.asset_id
+       ORDER BY ta.alert_id DESC
+       LIMIT 100`
+    );
+    return res.json({ rows, threshold_pct: ALERT_PCT });
+  } catch (error) {
+    return res.status(500).json({ error: "Trade alerts query failed", details: error.message });
   }
 });
 
@@ -559,15 +607,226 @@ app.post("/api/trades", async (req, res) => {
       [userId, assetId, tradeDate, tradeType, quantity, tradePrice, notes || null]
     );
 
+    const tradeId = result.insertId;
+    let alert = null;
+    try {
+      await checkTradePriceAlert(conn, tradeId);
+      const [alertRows] = await conn.query(
+        `SELECT ta.alert_type, ta.message, ta.change_pct, ast.name AS asset_name, t.trade_type
+         FROM Trade_Alerts ta
+         JOIN User_Trades t ON t.trade_id = ta.trade_id
+         JOIN Assets ast ON ast.asset_id = ta.asset_id
+         WHERE ta.trade_id = ?
+         ORDER BY ta.alert_id DESC
+         LIMIT 1`,
+        [tradeId]
+      );
+      if (alertRows.length) alert = alertRows[0];
+    } catch (alertError) {
+      console.error("Trade price alert check failed:", alertError.message);
+    }
+
     await conn.commit();
     conn.release();
-    return res.status(201).json({ ok: true, trade_id: result.insertId, user_id: userId });
+    return res.status(201).json({ ok: true, trade_id: tradeId, user_id: userId, alert });
   } catch (error) {
     try {
       await conn.rollback();
     } catch {}
     conn.release();
     return res.status(500).json({ error: "Failed to save trade", details: error.message });
+  }
+});
+
+const CHAT_PROMPTS = {
+  buy_sell: "What should I buy or sell?",
+  risky_regions: "Which regions are highest risk?",
+  market_summary: "Give me a market overview",
+  latest_news: "Show latest news headlines",
+  gti_help: "What is the GTI?",
+  watchlist_pick: "What are good watchlist assets?",
+  recent_trades: "Show recent user trades",
+};
+
+async function runChatQuery(pool, queryId) {
+  if (queryId === "buy_sell") {
+    const [bullish] = await pool.query(
+      `SELECT a.name AS asset_name, ap.price AS price_value, mi.direction
+       FROM Market_Impact mi
+       JOIN Assets a ON a.asset_id = mi.asset_id
+       LEFT JOIN (
+         SELECT p1.asset_id, p1.price
+         FROM Asset_Prices p1
+         JOIN (
+           SELECT asset_id, MAX(price_date) AS max_date FROM Asset_Prices GROUP BY asset_id
+         ) latest ON latest.asset_id = p1.asset_id AND latest.max_date = p1.price_date
+       ) ap ON ap.asset_id = a.asset_id
+       WHERE mi.direction = 'Bullish'
+       ORDER BY mi.impact_date DESC, mi.impact_id DESC
+       LIMIT 5`
+    );
+    const [bearish] = await pool.query(
+      `SELECT a.name AS asset_name, ap.price AS price_value, mi.direction
+       FROM Market_Impact mi
+       JOIN Assets a ON a.asset_id = mi.asset_id
+       LEFT JOIN (
+         SELECT p1.asset_id, p1.price
+         FROM Asset_Prices p1
+         JOIN (
+           SELECT asset_id, MAX(price_date) AS max_date FROM Asset_Prices GROUP BY asset_id
+         ) latest ON latest.asset_id = p1.asset_id AND latest.max_date = p1.price_date
+       ) ap ON ap.asset_id = a.asset_id
+       WHERE mi.direction = 'Bearish'
+       ORDER BY mi.impact_date DESC, mi.impact_id DESC
+       LIMIT 5`
+    );
+    const buyLines = bullish.map((r) => `• ${r.asset_name} @ ${Number(r.price_value || 0).toFixed(2)} (Bullish impact)`);
+    const sellLines = bearish.map((r) => `• ${r.asset_name} @ ${Number(r.price_value || 0).toFixed(2)} (Bearish impact)`);
+    return {
+      answer: `Based on Market_Impact direction from GeoTradeX:\n\nBUY ideas (Bullish):\n${buyLines.join("\n") || "• None in DB"}\n\nSELL / caution (Bearish):\n${sellLines.join("\n") || "• None in DB"}\n\nDemo logic only — not financial advice.`,
+    };
+  }
+
+  if (queryId === "risky_regions") {
+    const [rows] = await pool.query(
+      `SELECT r.name AS region_name, g.index_value,
+              CASE
+                WHEN g.index_value > 25 THEN 'Critical'
+                WHEN g.index_value > 15 THEN 'High'
+                WHEN g.index_value > 5 THEN 'Medium'
+                ELSE 'Low'
+              END AS risk_level
+       FROM GTI_Records g
+       JOIN Regions r ON r.region_id = g.region_id
+       ORDER BY g.index_value DESC
+       LIMIT 8`
+    );
+    const lines = rows.map((r) => `• ${r.region_name}: GTI ${Number(r.index_value).toFixed(2)} (${r.risk_level})`);
+    return {
+      answer: `Highest tension regions (from GTI_Records):\n\n${lines.join("\n")}\n\nAvoid heavy exposure where risk is Critical/High.`,
+    };
+  }
+
+  if (queryId === "market_summary") {
+    const [rows] = await pool.query(
+      `SELECT a.name AS asset_name, ap.price AS price_value, mi.direction, mi.predicted_volatility
+       FROM Assets a
+       LEFT JOIN (
+         SELECT p1.asset_id, p1.price_date, p1.price
+         FROM Asset_Prices p1
+         JOIN (
+           SELECT asset_id, MAX(price_date) AS max_date FROM Asset_Prices GROUP BY asset_id
+         ) latest ON latest.asset_id = p1.asset_id AND latest.max_date = p1.price_date
+       ) ap ON ap.asset_id = a.asset_id
+       LEFT JOIN Market_Impact mi ON mi.impact_id = (
+         SELECT mi2.impact_id FROM Market_Impact mi2
+         WHERE mi2.asset_id = a.asset_id
+         ORDER BY mi2.impact_date DESC, mi2.impact_id DESC LIMIT 1
+       )
+       ORDER BY ap.price_date DESC
+       LIMIT 8`
+    );
+    const lines = rows.map((r) => {
+      const vol = r.predicted_volatility == null ? "n/a" : Number(r.predicted_volatility).toFixed(2);
+      return `• ${r.asset_name}: ${Number(r.price_value || 0).toFixed(2)} — ${r.direction || "Neutral"} (vol ${vol})`;
+    });
+    return { answer: `Market snapshot (Assets + latest Asset_Prices + Market_Impact):\n\n${lines.join("\n")}` };
+  }
+
+  if (queryId === "latest_news") {
+    const [rows] = await pool.query(
+      `SELECT a.title, r.name AS region_name, c.category_name, sv.level_name AS severity
+       FROM News_Articles a
+       JOIN Article_Analysis aa ON aa.article_id = a.article_id
+       JOIN News_Sources ns ON a.source_id = ns.source_id
+       JOIN Countries co ON ns.country_id = co.country_id
+       JOIN Regions r ON r.region_id = co.region_id
+       JOIN Categories c ON c.category_id = aa.category_id
+       JOIN Severity_Levels sv ON sv.severity_id = aa.severity_id
+       ORDER BY a.publish_date DESC
+       LIMIT 6`
+    );
+    const lines = rows.map((r) => `• ${r.title} (${r.region_name}, ${r.category_name}, ${r.severity})`);
+    return { answer: `Latest intelligence (News_Articles + analysis):\n\n${lines.join("\n")}` };
+  }
+
+  if (queryId === "gti_help") {
+    const [rows] = await pool.query(
+      `SELECT r.name AS region_name, g.index_value
+       FROM GTI_Records g
+       JOIN Regions r ON r.region_id = g.region_id
+       ORDER BY g.index_value DESC
+       LIMIT 3`
+    );
+    const top = rows.map((r) => `${r.region_name} (${Number(r.index_value).toFixed(2)})`).join(", ");
+    return {
+      answer: `GTI = Geopolitical Tension Index. It is calculated from article severity in each region (see Calculate_GTI procedure) and stored in GTI_Records.\n\nTop regions right now: ${top || "no data"}.\n\nHigher GTI → higher geopolitical risk for that region.`,
+    };
+  }
+
+  if (queryId === "watchlist_pick") {
+    const [rows] = await pool.query(
+      `SELECT a.name AS asset_name, ap.price AS price_value, u.user_name
+       FROM Watchlist_Items wi
+       JOIN Watchlists w ON w.watchlist_id = wi.watchlist_id
+       JOIN Users u ON u.user_id = w.user_id
+       JOIN Assets a ON a.asset_id = wi.asset_id
+       LEFT JOIN (
+         SELECT p1.asset_id, p1.price
+         FROM Asset_Prices p1
+         JOIN (
+           SELECT asset_id, MAX(price_date) AS max_date FROM Asset_Prices GROUP BY asset_id
+         ) latest ON latest.asset_id = p1.asset_id AND latest.max_date = p1.price_date
+       ) ap ON ap.asset_id = a.asset_id
+       ORDER BY wi.id
+       LIMIT 8`
+    );
+    const lines = rows.map((r) => `• ${r.asset_name} @ ${Number(r.price_value || 0).toFixed(2)} (on ${r.user_name}'s watchlist)`);
+    return {
+      answer: `Popular watchlist assets in GeoTradeX:\n\n${lines.join("\n")}\n\nAdd more via the Watchlist screen.`,
+    };
+  }
+
+  if (queryId === "recent_trades") {
+    const [rows] = await pool.query(
+      `SELECT t.trade_id, u.user_name, ast.name AS asset_name, t.trade_type, t.trade_price, t.trade_date
+       FROM User_Trades t
+       JOIN Users u ON u.user_id = t.user_id
+       JOIN Assets ast ON ast.asset_id = t.asset_id
+       ORDER BY t.trade_id DESC
+       LIMIT 8`
+    );
+    const lines = rows.map(
+      (r) => `• #${r.trade_id} ${r.user_name}: ${r.trade_type} ${r.asset_name} @ ${Number(r.trade_price).toFixed(2)} on ${r.trade_date}`
+    );
+    return { answer: `Recent trades (User_Trades):\n\n${lines.join("\n") || "• No trades yet"}` };
+  }
+
+  return null;
+}
+
+app.get("/api/chat/prompts", (_req, res) => {
+  const prompts = Object.entries(CHAT_PROMPTS).map(([id, label]) => ({ id, label }));
+  res.json({ prompts });
+});
+
+app.post("/api/chat", async (req, res) => {
+  try {
+    const queryId = String(req.body?.query_id || "").trim();
+    if (!CHAT_PROMPTS[queryId]) {
+      return res.status(400).json({ error: "Unknown question. Pick a suggested prompt." });
+    }
+    const result = await runChatQuery(pool, queryId);
+    if (!result) {
+      return res.status(400).json({ error: "Unknown question" });
+    }
+    return res.json({
+      query_id: queryId,
+      question: CHAT_PROMPTS[queryId],
+      answer: result.answer,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: "Chat query failed", details: error.message });
   }
 });
 

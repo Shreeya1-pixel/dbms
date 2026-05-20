@@ -19,9 +19,21 @@
     .badge-critical { background: rgba(147, 0, 10, 0.35); color: #ffd9d3; }
     .badge-elevated { background: rgba(238, 152, 0, 0.35); color: #ffd59d; }
     .badge-low { background: rgba(0, 178, 123, 0.30); color: #7bffd0; }
+    #trade-alert-popup { display: none; }
+    #trade-alert-popup.show { display: block; }
+    .chat-user { background: linear-gradient(135deg, rgba(0, 218, 243, 0.18), rgba(99, 102, 241, 0.12)); border: 1px solid rgba(0, 218, 243, 0.45); }
+    .chat-bot { background: linear-gradient(135deg, #14171f, #1a1528); border: 1px solid rgba(167, 139, 250, 0.25); }
+    #chat-messages { max-height: 52vh; overflow-y: auto; }
+    .chat-welcome { background: linear-gradient(135deg, rgba(0, 218, 243, 0.08), rgba(16, 185, 129, 0.06)); border: 1px solid rgba(0, 218, 243, 0.2); }
   </style>
 </head>
 <body class="min-h-screen">
+
+  <div id="trade-alert-popup" class="fixed top-20 right-6 z-[100] max-w-sm panel p-4 shadow-lg border-cyan-500/40">
+    <p class="text-[10px] uppercase tracking-widest text-cyan-400 font-bold mb-1">Price alert</p>
+    <p id="trade-alert-popup-text" class="text-sm font-semibold"></p>
+    <button type="button" id="trade-alert-popup-close" class="mt-3 text-[10px] muted hover:text-white uppercase">Dismiss</button>
+  </div>
 
   <div id="login-page" class="min-h-screen flex items-center justify-center px-4">
     <div class="panel p-8 w-full max-w-sm space-y-5">
@@ -59,6 +71,7 @@
       <nav id="main-nav" class="flex gap-7 text-[10px] uppercase font-semibold tracking-wide">
         <button class="screen-tab tab-active" data-screen="dashboard">Dashboard</button>
         <button class="screen-tab tab-idle" data-screen="news">News</button>
+        <button class="screen-tab tab-idle" data-screen="chat">Assistant</button>
         <button class="screen-tab tab-idle nav-analyst" data-screen="market">Market</button>
         <button class="screen-tab tab-idle nav-analyst" data-screen="watchlist">Watchlist</button>
         <button class="screen-tab tab-idle nav-analyst" data-screen="trades">Trades</button>
@@ -135,6 +148,19 @@
           <tbody id="news-table"></tbody>
         </table>
       </div>
+    </section>
+
+    <section id="screen-chat" class="screen hidden panel p-4">
+      <h2 class="text-2xl font-semibold mb-1 bg-gradient-to-r from-cyan-400 to-emerald-400 bg-clip-text text-transparent">GeoTrade Assistant</h2>
+      <p class="text-[10px] muted uppercase tracking-[0.2em] mb-4">Predefined questions — answers from live SQL</p>
+      <div id="chat-prompts" class="grid sm:grid-cols-2 xl:grid-cols-3 gap-3 mb-6"></div>
+      <div id="chat-messages" class="space-y-4 mb-4 min-h-[200px]">
+        <div class="chat-welcome rounded-lg px-4 py-3 text-sm mr-4">
+          <p class="text-xs uppercase tracking-widest text-cyan-400 font-bold mb-2">Assistant</p>
+          <p class="text-slate-300">Pick a question below. Each answer is built from GeoTradeX tables (Market_Impact, GTI_Records, News_Articles, etc.).</p>
+        </div>
+      </div>
+      <p id="chat-status" class="text-xs muted"></p>
     </section>
 
     <section id="screen-market" class="screen hidden panel p-4">
@@ -215,6 +241,13 @@
         <button type="submit" class="bg-cyan-500 text-black font-semibold px-3 py-1 rounded text-sm">Save Trade</button>
         <p id="trade-form-status" class="text-xs muted col-span-full"></p>
       </form>
+      <div class="panel p-3 mb-4">
+        <h3 class="text-sm font-bold mb-1">Price alerts</h3>
+        <p class="text-[10px] muted uppercase tracking-widest mb-2">Vs latest Asset_Prices (threshold from server)</p>
+        <div id="trade-alerts-list" class="space-y-2 text-sm">
+          <p class="muted text-xs">No alerts yet.</p>
+        </div>
+      </div>
       <div class="overflow-auto">
         <table class="w-full text-left">
           <thead class="text-[10px] uppercase tracking-[0.18em] muted border-b border-white/10">
@@ -295,6 +328,112 @@
       if (d === "bullish") return "num-positive";
       if (d === "bearish") return "num-negative";
       return "text-slate-300";
+    }
+
+    function tradeAlertIsLoss(alert) {
+      const side = String(alert.trade_type || "BUY").toUpperCase();
+      const priceUp = alert.alert_type === "PRICE_UP";
+      if (side === "SELL") return priceUp;
+      return !priceUp;
+    }
+
+    function tradeAlertColor(alert) {
+      return tradeAlertIsLoss(alert) ? "num-negative" : "num-positive";
+    }
+
+    function showTradeAlertPopup(alert) {
+      const box = document.getElementById("trade-alert-popup");
+      const text = document.getElementById("trade-alert-popup-text");
+      const loss = tradeAlertIsLoss(alert);
+      const color = tradeAlertColor(alert);
+      box.classList.remove("border-cyan-500/40", "border-rose-500/50");
+      box.classList.add(loss ? "border-rose-500/50" : "border-cyan-500/40");
+      text.className = `text-sm font-semibold ${color}`;
+      const tag = loss ? "AT LOSS" : "IN PROFIT";
+      text.textContent = `${tag} · ${alert.trade_type} · ${alert.asset_name}: ${alert.message} (${Number(alert.change_pct).toFixed(1)}%)`;
+      box.classList.add("show");
+      clearTimeout(showTradeAlertPopup._t);
+      showTradeAlertPopup._t = setTimeout(() => box.classList.remove("show"), 8000);
+    }
+
+    document.getElementById("trade-alert-popup-close").addEventListener("click", () => {
+      document.getElementById("trade-alert-popup").classList.remove("show");
+    });
+
+    const CHAT_PROMPT_STYLE = {
+      buy_sell: "bg-emerald-950/60 border-emerald-400/50 text-emerald-100 hover:bg-emerald-900/50 hover:border-emerald-300",
+      risky_regions: "bg-rose-950/60 border-rose-400/50 text-rose-100 hover:bg-rose-900/50 hover:border-rose-300",
+      market_summary: "bg-amber-950/60 border-amber-400/50 text-amber-100 hover:bg-amber-900/50 hover:border-amber-300",
+      latest_news: "bg-cyan-950/60 border-cyan-400/50 text-cyan-100 hover:bg-cyan-900/50 hover:border-cyan-300",
+      gti_help: "bg-violet-950/60 border-violet-400/50 text-violet-100 hover:bg-violet-900/50 hover:border-violet-300",
+      watchlist_pick: "bg-sky-950/60 border-sky-400/50 text-sky-100 hover:bg-sky-900/50 hover:border-sky-300",
+      recent_trades: "bg-fuchsia-950/60 border-fuchsia-400/50 text-fuchsia-100 hover:bg-fuchsia-900/50 hover:border-fuchsia-300",
+    };
+
+    function formatChatAnswer(text) {
+      let mode = "normal";
+      return esc(text)
+        .split("\n")
+        .map((line) => {
+          if (line.includes("BUY ideas")) mode = "buy";
+          if (line.includes("SELL") || line.includes("caution")) mode = "sell";
+          let cls = "text-slate-300 text-[15px] leading-relaxed py-0.5";
+          if (line.includes("BUY ideas")) cls = "num-positive font-bold text-base mt-2";
+          else if (line.includes("SELL") || line.includes("caution")) cls = "num-negative font-bold text-base mt-2";
+          else if (mode === "buy" && line.startsWith("•")) cls = "num-positive font-medium text-[15px] pl-1";
+          else if (mode === "sell" && line.startsWith("•")) cls = "num-negative font-medium text-[15px] pl-1";
+          else if (line.includes("Critical")) cls = "num-critical font-semibold text-[15px]";
+          else if (line.includes("High")) cls = "num-elevated font-semibold text-[15px]";
+          else if (line.includes("Medium")) cls = "text-amber-300 font-medium text-[15px]";
+          else if (line.includes("Low")) cls = "num-positive text-[15px]";
+          else if (/^Based on|^Highest|^Market snapshot|^Latest|^GTI =|^Popular|^Recent|^Avoid heavy/.test(line))
+            cls = "text-cyan-200 font-semibold text-[15px] mt-1";
+          else if (line.startsWith("•")) cls = "text-slate-200 text-[15px] pl-1";
+          return `<p class="${cls}">${line || "&nbsp;"}</p>`;
+        })
+        .join("");
+    }
+
+    function appendChatMessage(role, text) {
+      const box = document.getElementById("chat-messages");
+      const wrap = document.createElement("div");
+      wrap.className = role === "user"
+        ? "chat-user rounded-lg px-4 py-3 text-base ml-4 md:ml-12"
+        : "chat-bot rounded-lg px-4 py-3 text-base mr-4 md:mr-12";
+      const label = role === "user" ? "You" : "Assistant";
+      const body = role === "bot" ? formatChatAnswer(text) : `<p class="text-[15px] font-medium text-white leading-relaxed">${esc(text)}</p>`;
+      wrap.innerHTML = `<p class="text-xs uppercase tracking-widest ${role === "user" ? "text-cyan-300 font-bold" : "text-violet-300 font-bold"} mb-2">${label}</p>${body}`;
+      box.appendChild(wrap);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    async function loadChatPrompts() {
+      const d = await getJson("/api/chat/prompts");
+      const host = document.getElementById("chat-prompts");
+      host.innerHTML = (d.prompts || []).map((p) => {
+        const style = CHAT_PROMPT_STYLE[p.id] || "bg-slate-900/60 border-white/20 text-slate-200 hover:border-cyan-400";
+        return `
+        <button type="button" class="chat-prompt-btn border-2 rounded-lg px-4 py-3 text-left text-sm md:text-base font-semibold leading-snug transition-colors ${style}" data-query-id="${esc(p.id)}">${esc(p.label)}</button>
+      `;
+      }).join("");
+      host.querySelectorAll(".chat-prompt-btn").forEach((btn) => {
+        btn.addEventListener("click", () => askChat(btn.dataset.queryId, btn.textContent));
+      });
+    }
+
+    async function askChat(queryId, label) {
+      const status = document.getElementById("chat-status");
+      status.textContent = "Querying database...";
+      appendChatMessage("user", label);
+      try {
+        const d = await postJson("/api/chat", { query_id: queryId });
+        appendChatMessage("bot", d.answer);
+        status.textContent = "";
+      } catch (error) {
+        appendChatMessage("bot", error.message);
+        status.className = "text-xs num-negative";
+        status.textContent = "Query failed.";
+      }
     }
 
     async function loadDashboard() {
@@ -433,6 +572,27 @@
       `).join("");
     }
 
+    async function loadTradeAlerts() {
+      const d = await getJson("/api/trade-alerts");
+      const list = document.getElementById("trade-alerts-list");
+      const rows = d.rows || [];
+      if (!rows.length) {
+        list.innerHTML = `<p class="muted text-xs">No alerts yet. Save a trade where entry price differs from latest market price by at least ${esc(d.threshold_pct ?? 5)}%.</p>`;
+        return;
+      }
+      list.innerHTML = rows.map((a) => {
+        const color = tradeAlertColor(a);
+        const label = tradeAlertIsLoss(a) ? "AT LOSS" : "IN PROFIT";
+        return `
+          <div class="border border-white/10 rounded px-3 py-2 ${color}">
+            <p class="font-semibold text-xs uppercase">${esc(label)} · ${esc(a.trade_type)} · ${esc(a.asset_name)} · Trade #${esc(a.trade_id)}</p>
+            <p class="text-[11px] mt-1">${esc(a.message)}</p>
+            <p class="text-[10px] muted mt-1">Entry ${Number(a.trade_price).toFixed(2)} → Now ${Number(a.current_price).toFixed(2)} (${Number(a.change_pct).toFixed(2)}%) · ${esc(a.user_name)}</p>
+          </div>
+        `;
+      }).join("");
+    }
+
     async function loadTrades() {
       const d = await getJson("/api/trades");
       document.getElementById("trades-table").innerHTML = (d.rows || []).map((r) => `
@@ -491,11 +651,13 @@
       };
 
       try {
-        await postJson("/api/trades", payload);
+        const result = await postJson("/api/trades", payload);
         status.className = "text-xs num-positive col-span-full";
         status.textContent = "Trade saved.";
         document.getElementById("trade-form").reset();
         await loadTrades();
+        await loadTradeAlerts();
+        if (result.alert) showTradeAlertPopup(result.alert);
       } catch (error) {
         status.className = "text-xs num-negative col-span-full";
         status.textContent = error.message;
@@ -524,9 +686,9 @@
         `${user.username.toUpperCase()} · ${user.role.toUpperCase()}`;
       applyRole(user.role);
 
-      Promise.all([loadDashboard(), loadNews(), loadMarket(), loadWatchlist(), loadTableNames(), loadTrades(), loadRegionRiskView(), loadRoleGrants()])
+      Promise.all([loadDashboard(), loadNews(), loadChatPrompts(), loadMarket(), loadWatchlist(), loadTableNames(), loadTrades(), loadTradeAlerts(), loadRegionRiskView(), loadRoleGrants()])
         .catch((e) => {
-          ["dashboard-news", "news-table", "market-grid", "watchlist-table", "dashboard-market", "dashboard-watchlist", "table-body", "trades-table", "region-risk-body", "role-grants-box"]
+          ["dashboard-news", "news-table", "market-grid", "watchlist-table", "dashboard-market", "dashboard-watchlist", "table-body", "trades-table", "trade-alerts-list", "region-risk-body", "role-grants-box"]
             .forEach((id) => {
               const el = document.getElementById(id);
               if (el) el.innerHTML = `<div class="text-rose-300">${esc(e.message)}</div>`;

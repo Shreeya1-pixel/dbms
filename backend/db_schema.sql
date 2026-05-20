@@ -197,6 +197,22 @@ CREATE TABLE User_Trades (
    FOREIGN KEY (asset_id) REFERENCES Assets(asset_id)
 );
 
+CREATE TABLE Trade_Alerts (
+   alert_id INT PRIMARY KEY AUTO_INCREMENT,
+   trade_id INT NOT NULL,
+   user_id INT NOT NULL,
+   asset_id INT NOT NULL,
+   alert_type ENUM('PRICE_UP', 'PRICE_DOWN') NOT NULL,
+   trade_price FLOAT NOT NULL,
+   current_price FLOAT NOT NULL,
+   change_pct FLOAT NOT NULL,
+   message VARCHAR(255),
+   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+   FOREIGN KEY (trade_id) REFERENCES User_Trades(trade_id),
+   FOREIGN KEY (user_id) REFERENCES Users(user_id),
+   FOREIGN KEY (asset_id) REFERENCES Assets(asset_id)
+);
+
 DELIMITER //
 
 CREATE FUNCTION Get_Severity_Weight(sid INT)
@@ -305,6 +321,52 @@ BEGIN
    IF NEW.index_value > 20 THEN
        INSERT INTO GTI_Alerts(region_id, message)
        VALUES (NEW.region_id, 'High Risk');
+   END IF;
+END //
+
+DELIMITER ;
+
+DELIMITER //
+
+CREATE PROCEDURE Check_Trade_Price_Alert(IN p_trade_id INT, IN p_threshold_pct FLOAT)
+BEGIN
+   DECLARE v_user_id INT;
+   DECLARE v_asset_id INT;
+   DECLARE v_trade_price FLOAT;
+   DECLARE v_current_price FLOAT;
+   DECLARE v_change_pct FLOAT;
+   DECLARE v_asset_name VARCHAR(50);
+   DECLARE v_message VARCHAR(255);
+
+   SELECT user_id, asset_id, trade_price
+   INTO v_user_id, v_asset_id, v_trade_price
+   FROM User_Trades
+   WHERE trade_id = p_trade_id;
+
+   SELECT ap.price INTO v_current_price
+   FROM Asset_Prices ap
+   JOIN (
+      SELECT asset_id, MAX(price_date) AS max_date
+      FROM Asset_Prices
+      WHERE asset_id = v_asset_id
+      GROUP BY asset_id
+   ) latest ON latest.asset_id = ap.asset_id AND latest.max_date = ap.price_date
+   WHERE ap.asset_id = v_asset_id
+   LIMIT 1;
+
+   IF v_current_price IS NOT NULL AND v_trade_price IS NOT NULL AND v_trade_price <> 0 THEN
+      SET v_change_pct = ((v_current_price - v_trade_price) / v_trade_price) * 100;
+      SELECT name INTO v_asset_name FROM Assets WHERE asset_id = v_asset_id;
+
+      IF v_change_pct >= p_threshold_pct THEN
+         SET v_message = CONCAT(v_asset_name, ' up ', ROUND(v_change_pct, 2), '% vs trade entry');
+         INSERT INTO Trade_Alerts (trade_id, user_id, asset_id, alert_type, trade_price, current_price, change_pct, message)
+         VALUES (p_trade_id, v_user_id, v_asset_id, 'PRICE_UP', v_trade_price, v_current_price, v_change_pct, v_message);
+      ELSEIF v_change_pct <= -p_threshold_pct THEN
+         SET v_message = CONCAT(v_asset_name, ' down ', ROUND(ABS(v_change_pct), 2), '% vs trade entry');
+         INSERT INTO Trade_Alerts (trade_id, user_id, asset_id, alert_type, trade_price, current_price, change_pct, message)
+         VALUES (p_trade_id, v_user_id, v_asset_id, 'PRICE_DOWN', v_trade_price, v_current_price, v_change_pct, v_message);
+      END IF;
    END IF;
 END //
 
